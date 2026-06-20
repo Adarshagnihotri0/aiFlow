@@ -7,6 +7,7 @@ import type { StageRecord, TraceContext } from './types';
 export class TraceBuilder {
   private trace_id: string;
   private route: string;
+  private project_root?: string;
   private metadata?: Record<string, unknown>;
   private stages: StageRecord[] = [];
   private currentStage: { name: string; start: number } | null = null;
@@ -17,6 +18,7 @@ export class TraceBuilder {
   constructor(context: TraceContext) {
     this.trace_id = context.trace_id;
     this.route = context.route;
+    this.project_root = context.project_root || process.cwd();
     this.metadata = context.metadata;
     this.startTime = Date.now();
   }
@@ -74,6 +76,7 @@ export class TraceBuilder {
     total_ms: number;
     status: 'success' | 'error' | 'timeout';
     error_message?: string;
+    project_root?: string;
     metadata?: Record<string, unknown>;
   } {
     // End any open stage
@@ -88,6 +91,7 @@ export class TraceBuilder {
       total_ms: Date.now() - this.startTime,
       status: this.status,
       error_message: this.error_message,
+      project_root: this.project_root,
       metadata: this.metadata,
     };
   }

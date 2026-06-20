@@ -22,9 +22,9 @@ export async function saveTrace(trace: ExecutionTraceRow): Promise<void> {
       `INSERT INTO execution_traces (
         trace_id, route,
         routing_ms, prompt_build_ms, adapter_ms, total_ms,
-        status, error_message, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-      ON CONFLICT (trace_id) DO NOTHING`, // Handle duplicate trace_id gracefully
+        status, error_message, project_root, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ON CONFLICT (trace_id) DO NOTHING`,
       [
         trace.trace_id,
         trace.route,
@@ -33,7 +33,8 @@ export async function saveTrace(trace: ExecutionTraceRow): Promise<void> {
         trace.adapter_ms,
         trace.total_ms,
         trace.status,
-        trace.error_message
+        trace.error_message,
+        trace.project_root
       ]
     );
   } catch (err) {

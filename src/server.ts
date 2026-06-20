@@ -202,11 +202,25 @@ app.post('/api/v1/traces', async (req, res) => {
       route: tracePayload.route,
       status: tracePayload.status,
       total_ms: tracePayload.total_ms,
-      stages: tracePayload.stages?.length || 0
+      stages: tracePayload.stages?.length || 0,
+      project_root: tracePayload.project_root
     });
 
-    // TODO: Persist trace to database (reusing existing save-trace infrastructure)
-    // For now, just acknowledge receipt
+    // Persist trace to database with project_root
+    const { saveTraceAsync } = await import('./db/save-trace-async');
+    const traceRow: import('./types/trace').ExecutionTraceRow = {
+      trace_id: tracePayload.trace_id,
+      route: tracePayload.route,
+      routing_ms: tracePayload.stages?.find((s: any) => s.name === 'routing')?.duration_ms || null,
+      prompt_build_ms: tracePayload.stages?.find((s: any) => s.name === 'prompt_build')?.duration_ms || null,
+      adapter_ms: tracePayload.stages?.find((s: any) => s.name === 'adapter')?.duration_ms || null,
+      total_ms: tracePayload.total_ms,
+      status: tracePayload.status,
+      error_message: tracePayload.error_message || null,
+      project_root: tracePayload.project_root || null
+    };
+    saveTraceAsync(traceRow);
+    
     res.json({ 
       status: 'ok', 
       trace_id: tracePayload.trace_id,
@@ -330,7 +344,7 @@ app.get('/api/v1/context', async (req, res) => {
       });
     }
     
-    // 5. Query recent traces from database
+    // 5. Query recent traces from database (project-scoped)
     const { getPool } = await import('./db/client');
     const pool = getPool();
     
@@ -339,9 +353,10 @@ app.get('/api/v1/context', async (req, res) => {
       const result = await pool.query(`
         SELECT trace_id, route, total_ms, status, created_at as timestamp
         FROM execution_traces
+        WHERE project_root = $1
         ORDER BY created_at DESC
         LIMIT 10
-      `);
+      `, [root]);
       traces = result.rows;
     } catch (e) {
       // Database might not be initialized yet

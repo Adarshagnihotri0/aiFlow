@@ -16,6 +16,7 @@ export interface ExecutionTracePayload {
   total_ms: number;
   status: 'success' | 'error' | 'timeout';
   error_message?: string;
+  project_root?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -29,5 +30,6 @@ export interface SDKConfig {
 export interface TraceContext {
   trace_id: string;
   route: string;
+  project_root?: string;
   metadata?: Record<string, unknown>;
 }
