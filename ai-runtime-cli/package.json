@@ -1,0 +1,22 @@
+{
+  "name": "@adarsh/ai-runtime-cli",
+  "version": "0.1.0",
+  "description": "CLI for AI Runtime - Get project context for any repo",
+  "bin": {
+    "airuntime": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "commander": "^11.0.0",
+    "axios": "^1.6.0",
+    "chalk": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.5",
+    "ts-node": "^10.9.2"
+  }
+}

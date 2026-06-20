@@ -35,6 +35,7 @@ export interface ExecutionTraceRow {
   total_ms: number;
   status: string;
   error_message: string | null;
+  project_root: string | null;
 }
 
 /**
@@ -113,7 +114,8 @@ export class ExecutionTraceBuilder {
       adapter_ms: getStageMs('adapter'),
       total_ms: this.stages.reduce((sum, stage) => sum + stage.duration_ms, 0),
       status: this.status,
-      error_message: this.error_message || null
+      error_message: this.error_message || null,
+      project_root: null
     };
   }
 }

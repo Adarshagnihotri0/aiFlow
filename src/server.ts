@@ -135,4 +135,314 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 });
 
+// ── Trace ingestion endpoint for SDK clients ─────────────────────────────────────
+app.post('/trace', async (req, res) => {
+  try {
+    const tracePayload = req.body;
+    
+    // Validate trace payload
+    if (!tracePayload.trace_id || !tracePayload.route) {
+      res.status(400).json({ error: 'Invalid trace payload' });
+      return;
+    }
+
+    // Log received trace
+    const logger = createContextLogger({
+      trace_id: tracePayload.trace_id,
+      route: tracePayload.route,
+      timestamp: new Date().toISOString(),
+      method: 'TRACE',
+      path: '/trace',
+      start_time: Date.now(),
+    });
+
+    logger.info('Trace received', {
+      route: tracePayload.route,
+      status: tracePayload.status,
+      total_ms: tracePayload.total_ms,
+      stages: tracePayload.stages?.length || 0
+    });
+
+    // TODO: Persist trace to database (reusing existing save-trace infrastructure)
+    // For now, just acknowledge receipt
+    res.json({ 
+      status: 'ok', 
+      trace_id: tracePayload.trace_id,
+      received_at: new Date().toISOString()
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Trace ingestion error:', message);
+    res.status(500).json({ error: 'Failed to process trace' });
+  }
+});
+
+// ── Versioned trace endpoint (canonical) ────────────────────────────────────────
+app.post('/api/v1/traces', async (req, res) => {
+  try {
+    const tracePayload = req.body;
+    
+    // Validate trace payload
+    if (!tracePayload.trace_id || !tracePayload.route) {
+      res.status(400).json({ error: 'Invalid trace payload' });
+      return;
+    }
+
+    // Log received trace
+    const logger = createContextLogger({
+      trace_id: tracePayload.trace_id,
+      route: tracePayload.route,
+      timestamp: new Date().toISOString(),
+      method: 'TRACE',
+      path: '/api/v1/traces',
+      start_time: Date.now(),
+    });
+
+    logger.info('Trace received (v1 API)', {
+      route: tracePayload.route,
+      status: tracePayload.status,
+      total_ms: tracePayload.total_ms,
+      stages: tracePayload.stages?.length || 0,
+      project_root: tracePayload.project_root
+    });
+
+    // Persist trace to database with project_root
+    const { saveTraceAsync } = await import('./db/save-trace-async');
+    const traceRow: import('./types/trace').ExecutionTraceRow = {
+      trace_id: tracePayload.trace_id,
+      route: tracePayload.route,
+      routing_ms: tracePayload.stages?.find((s: any) => s.name === 'routing')?.duration_ms || null,
+      prompt_build_ms: tracePayload.stages?.find((s: any) => s.name === 'prompt_build')?.duration_ms || null,
+      adapter_ms: tracePayload.stages?.find((s: any) => s.name === 'adapter')?.duration_ms || null,
+      total_ms: tracePayload.total_ms,
+      status: tracePayload.status,
+      error_message: tracePayload.error_message || null,
+      project_root: tracePayload.project_root || null
+    };
+    saveTraceAsync(traceRow);
+    
+    res.json({ 
+      status: 'ok', 
+      trace_id: tracePayload.trace_id,
+      received_at: new Date().toISOString(),
+      api_version: 'v1'
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Trace ingestion error (v1):', message);
+    res.status(500).json({ error: 'Failed to process trace' });
+  }
+});
+
+// ── Context endpoint for CLI - Returns AI-ready project context ───────────────
+app.get('/api/v1/context', async (req, res) => {
+  try {
+    const root = req.query.root as string;
+    
+    if (!root) {
+      res.status(400).json({ error: 'Missing root parameter' });
+      return;
+    }
+
+    const { existsSync, readFileSync } = await import('fs');
+    const { join, basename } = await import('path');
+    const { execSync } = await import('child_process');
+    
+    // 1. Derive project name (no config required)
+    let projectName = basename(root);
+    let packageJson: any = null;
+    
+    if (existsSync(join(root, 'package.json'))) {
+      try {
+        packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+        projectName = packageJson.name || projectName;
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+    
+    // 2. Git status (execute in project directory)
+    let gitBranch = 'unknown';
+    let gitStatus = '';
+    let gitRemote = '';
+    
+    try {
+      gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
+      gitStatus = execSync('git status --short', { cwd: root, encoding: 'utf-8' }).trim();
+      gitRemote = execSync('git remote get-url origin 2>/dev/null || echo ""', { cwd: root, encoding: 'utf-8' }).trim();
+    } catch (e) {
+      // Not a git repo or git not installed
+    }
+    
+    // 3. Scan important files with metadata
+    const { readdirSync, statSync, readFileSync: readFile } = await import('fs');
+    const importantFiles: Array<{ path: string; lines?: number }> = [];
+    
+    const countLines = (filePath: string): number => {
+      try {
+        const content = readFile(filePath, 'utf-8');
+        return content.split('\n').length;
+      } catch {
+        return 0;
+      }
+    };
+    
+    try {
+      // Files to always include
+      const criticalFiles = ['package.json', 'README.md', 'tsconfig.json', 'docker-compose.yml', 'Dockerfile'];
+      criticalFiles.forEach(file => {
+        const fullPath = join(root, file);
+        if (existsSync(fullPath)) {
+          const lines = countLines(fullPath);
+          importantFiles.push({ path: file, lines });
+        }
+      });
+      
+      // Scan src/ directory if exists
+      const srcDir = join(root, 'src');
+      if (existsSync(srcDir)) {
+        const scanDir = (dir: string, prefix: string = '') => {
+          try {
+            const entries = readdirSync(dir);
+            entries.forEach(entry => {
+              if (entry.startsWith('.') || entry === 'node_modules') return;
+              
+              const fullPath = join(dir, entry);
+              const stat = statSync(fullPath);
+              const relativePath = prefix ? `${prefix}/${entry}` : entry;
+              
+              if (stat.isDirectory()) {
+                scanDir(fullPath, relativePath);
+              } else if (stat.isFile() && /\.(ts|js|jsx|tsx|py|go|rs)$/.test(entry)) {
+                const lines = countLines(fullPath);
+                importantFiles.push({ path: `src/${relativePath}`, lines });
+              }
+            });
+          } catch (e) {}
+        };
+        scanDir(srcDir);
+      }
+    } catch (e) {
+      console.warn('Could not scan files:', e);
+    }
+    
+    // 4. Deep mode: Add file previews
+    const deep = req.query.deep === 'true';
+    if (deep && importantFiles.length > 0) {
+      const fs = await import('fs');
+      importantFiles.forEach((file: any) => {
+        if (file.path && file.lines && file.lines < 500) {  // Only preview files < 500 lines
+          try {
+            const fullPath = join(root, file.path);
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            const previewLines = content.split('\n').slice(0, 20);
+            file.preview = previewLines.join('\n');
+          } catch (e) {
+            // Skip preview if can't read
+          }
+        }
+      });
+    }
+    
+    // 5. Query recent traces from database (project-scoped)
+    const { getPool } = await import('./db/client');
+    const pool = getPool();
+    
+    let traces: any[] = [];
+    try {
+      const result = await pool.query(`
+        SELECT trace_id, route, total_ms, status, created_at as timestamp
+        FROM execution_traces
+        WHERE project_root = $1
+        ORDER BY created_at DESC
+        LIMIT 10
+      `, [root]);
+      traces = result.rows;
+    } catch (e) {
+      // Database might not be initialized yet
+      console.warn('Could not fetch traces:', e);
+    }
+    
+    // 5. Build warnings
+    const warnings: string[] = [];
+    if (!packageJson) warnings.push('No package.json found');
+    if (!gitBranch || gitBranch === 'unknown') warnings.push('Not a git repository');
+    
+    // 6. Build recommendations
+    const recommendations: string[] = [];
+    if (traces.length === 0) {
+      recommendations.push('Run tasks to build trace history');
+    }
+    
+    // 7. Extract dependencies
+    const dependencies = {
+      production: packageJson?.dependencies ? Object.keys(packageJson.dependencies) : [],
+      development: packageJson?.devDependencies ? Object.keys(packageJson.devDependencies) : []
+    };
+    
+    res.json({
+      project: {
+        name: projectName,
+        root,
+        package_manager: packageJson ? 'npm' : 'unknown'
+      },
+      git: {
+        branch: gitBranch,
+        remote: gitRemote,
+        status: gitStatus || null
+      },
+      important_files: importantFiles,
+      dependencies,
+      traces,
+      warnings,
+      recommendations
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Context generation error:', message);
+    res.status(500).json({ error: 'Failed to generate context' });
+  }
+});
+
+// ── Trace detail endpoint ───────────────────────────────────────────────────────
+app.get('/api/v1/traces/:id', async (req, res) => {
+  try {
+    const traceId = req.params.id;
+    
+    const { getPool } = await import('./db/client');
+    const pool = getPool();
+    
+    const result = await pool.query(
+      'SELECT * FROM execution_traces WHERE trace_id = $1',
+      [traceId]
+    );
+    
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: 'Trace not found' });
+      return;
+    }
+    
+    const trace = result.rows[0];
+    
+    // Format for readability
+    res.json({
+      trace_id: trace.trace_id,
+      route: trace.route,
+      timing: {
+        routing_ms: trace.routing_ms,
+        prompt_build_ms: trace.prompt_build_ms,
+        adapter_ms: trace.adapter_ms,
+        total_ms: trace.total_ms
+      },
+      status: trace.status,
+      error: trace.error_message || null,
+      timestamp: trace.created_at
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Trace fetch error:', message);
+    res.status(500).json({ error: 'Failed to fetch trace' });
+  }
+});
+
 export default app;

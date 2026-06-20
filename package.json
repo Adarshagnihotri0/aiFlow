@@ -1,10 +1,12 @@
 {
-  "name": "bedrock-proxy",
+  "name": "developer-context-generator",
   "version": "1.0.0",
-  "description": "Anthropic-compatible proxy for AWS Bedrock — integrates with Claude Code",
+  "description": "A CLI that automatically generates AI-ready project context from any repository",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:sdk && npm run build:cli",
+    "build:sdk": "cd sdk && npm run build",
+    "build:cli": "cd ai-runtime-cli && npm run build",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts"
   },
