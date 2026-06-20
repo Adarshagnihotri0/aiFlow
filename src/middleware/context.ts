@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ExecutionContext, RouteType } from '../types/context';
 import { ExecutionTraceBuilder } from '../types/trace';
 import { createContextLogger } from '../utils/logger';
+import { saveTraceAsync } from '../db/save-trace-async';
 
 // Extend Express Request to include trace
 declare global {
@@ -61,8 +62,8 @@ export function contextMiddleware(req: Request, res: Response, next: NextFunctio
   // Attach to request object
   req.context = context;
   
-  // Create execution trace builder (Phase 2)
-  const trace = new ExecutionTraceBuilder(context.trace_id);
+  // Create execution trace builder with route classification
+  const trace = new ExecutionTraceBuilder(context.trace_id, context.route);
   req.trace = trace;
   
   // Create context-aware logger
@@ -75,9 +76,19 @@ export function contextMiddleware(req: Request, res: Response, next: NextFunctio
     route: context.route
   });
   
-  // Log response on finish with trace
+  // Persistence middleware: Async save trace on response finish
   res.on('finish', () => {
+    // Set error status if request failed
+    if (res.statusCode >= 400) {
+      trace.setError(`HTTP ${res.statusCode}`);
+    }
+    
+    // Build and persist trace asynchronously (fire-and-forget)
     const completedTrace = trace.complete();
+    const traceRow = trace.toRow();
+    saveTraceAsync(traceRow);
+    
+    // Log with trace structure
     logger.info('Request completed', {
       statusCode: res.statusCode,
       trace: completedTrace

@@ -16,8 +16,25 @@ export interface StageRecord {
 
 export interface ExecutionTrace {
   trace_id: string;
+  route: 'anthropic' | 'openai' | 'legacy';
   stages: StageRecord[];
   total_ms: number;
+  status: 'success' | 'error' | 'timeout';
+  error_message?: string;
+}
+
+/**
+ * Convert ExecutionTrace to flat format for DB insertion
+ */
+export interface ExecutionTraceRow {
+  trace_id: string;
+  route: string;
+  routing_ms: number | null;
+  prompt_build_ms: number | null;
+  adapter_ms: number | null;
+  total_ms: number;
+  status: string;
+  error_message: string | null;
 }
 
 /**
@@ -32,11 +49,20 @@ export interface ExecutionTrace {
  */
 export class ExecutionTraceBuilder {
   private trace_id: string;
+  private route: 'anthropic' | 'openai' | 'legacy';
   private stages: StageRecord[] = [];
   private currentStage: { name: string; start: number } | null = null;
+  private status: 'success' | 'error' | 'timeout' = 'success';
+  private error_message?: string;
 
-  constructor(trace_id: string) {
+  constructor(trace_id: string, route: 'anthropic' | 'openai' | 'legacy') {
     this.trace_id = trace_id;
+    this.route = route;
+  }
+
+  setError(message: string): void {
+    this.status = 'error';
+    this.error_message = message;
   }
 
   start(name: string): void {
@@ -62,8 +88,32 @@ export class ExecutionTraceBuilder {
   complete(): ExecutionTrace {
     return {
       trace_id: this.trace_id,
+      route: this.route,
       stages: this.stages,
-      total_ms: this.stages.reduce((sum, stage) => sum + stage.duration_ms, 0)
+      total_ms: this.stages.reduce((sum, stage) => sum + stage.duration_ms, 0),
+      status: this.status,
+      error_message: this.error_message
+    };
+  }
+
+  /**
+   * Convert to flat DB row format
+   */
+  toRow(): ExecutionTraceRow {
+    const getStageMs = (name: string): number | null => {
+      const stage = this.stages.find(s => s.name === name);
+      return stage ? stage.duration_ms : null;
+    };
+
+    return {
+      trace_id: this.trace_id,
+      route: this.route,
+      routing_ms: getStageMs('routing'),
+      prompt_build_ms: getStageMs('prompt_build'),
+      adapter_ms: getStageMs('adapter'),
+      total_ms: this.stages.reduce((sum, stage) => sum + stage.duration_ms, 0),
+      status: this.status,
+      error_message: this.error_message || null
     };
   }
 }
