@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+
+# AI artifacts - ephemeral discoveries
+.ai/observe/
+.ai/explain/
+.ai/decide/
+
+# Keep persistent knowledge
+!.ai/decision-records/

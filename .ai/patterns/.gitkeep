@@ -1,0 +1,46 @@
+# Compressed Patterns
+
+Reusable engineering patterns extracted from decision records.
+
+## Format: `PATTERN-XXX-category.md`
+
+### Example: `PATTERN-001-authentication.md`
+
+```markdown
+# PATTERN: Authentication
+
+## Rule
+Always use passport.js for authentication protocols
+
+## Context
+- OAuth, SAML, JWT implementations
+- Tested across multiple integrations
+
+## Examples
+- DR-001: OAuth implementation
+- DR-002: SAML integration
+- DR-003: JWT token handling
+
+## Pattern Strength
+★★★★☆ (validated in 3+ implementations)
+
+## When to Use
+- Any auth protocol integration
+- Multi-provider authentication
+- Token-based auth
+
+## Last Validated
+2026-06-20 (Auto-detected from CI)
+```
+
+---
+
+## Pattern Compression Rules
+
+1. **Threshold:** 3+ similar decisions
+2. **Confidence:** Minimum 4-star evidence
+3. **Validation:** Tests passing in all examples
+
+---
+
+Last updated: 2026-06-20

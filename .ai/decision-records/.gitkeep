@@ -1,0 +1,52 @@
+# Decision Records
+
+Persistent knowledge tracking for high-risk decisions.
+
+## Format: `DR-XXX-short-name.md`
+
+### Example: `DR-001-model-field-derivation.md`
+
+```markdown
+# DR-001: Model Field Derivation
+
+## Decision
+All model field references derived from STATIC_MODEL_ID
+
+## Context
+- Auth endpoints need consistent model references
+- API contracts depend on model field
+
+## Alternatives Considered
+1. Hardcoded strings (rejected: maintenance burden)
+2. Config file (rejected: over-engineering)
+3. Constants file (chosen: type-safe, single source)
+
+## Evidence
+- EL-001: src/adapters.ts:7 shows model field used
+- Strength: ★★★★☆ (runtime validated)
+
+## Status
+IMPLEMENTED (2026-06-20)
+Validated by: test suite passing
+```
+
+---
+
+## When to Create DR
+
+**Create DR if:**
+- Authentication/authorization changes
+- API contract modifications
+- Architecture decisions
+- Security implementations
+- Database schema changes
+
+**Skip DR if:**
+- Bug fixes
+- Refactoring
+- Minor UI tweaks
+- Documentation updates
+
+---
+
+Last updated: 2026-06-20

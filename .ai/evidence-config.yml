@@ -1,0 +1,121 @@
+# Domain-specific evidence weighting configuration
+
+version: 2.0
+
+# Project domain
+domain: backend
+
+# Evidence strength weights (1-5 stars)
+evidence_weights:
+  integration_test:
+    weight: 5
+    confidence_multiplier: 1.0
+    description: "Most reliable for backend"
+    
+  unit_test:
+    weight: 3
+    confidence_multiplier: 0.8
+    description: "Good but may miss integration issues"
+    
+  runtime_trace:
+    weight: 4
+    confidence_multiplier: 0.9
+    description: "Actual execution path"
+    
+  ast_reference:
+    weight: 4
+    confidence_multiplier: 0.85
+    description: "Static analysis verified"
+    
+  grep_search:
+    weight: 2
+    confidence_multiplier: 0.5
+    description: "Text match only"
+
+# Automatic evidence capture settings
+auto_capture:
+  sources:
+    - git_history          # Commit patterns, file changes
+    - test_coverage        # Coverage % per file
+    - build_status         # CI/CD pass/fail
+    - dependency_graph     # Import analysis
+    
+  frequency: weekly        # How often to run auto-capture
+  
+  # Risk classification thresholds
+  risk_thresholds:
+    LOW:
+      coverage: ">80%"
+      tests: ">10"
+      
+    MEDIUM:
+      coverage: "50-80%"
+      tests: "5-10"
+      
+    HIGH:
+      coverage: "<50%"
+      tests: "<5"
+
+# Pattern compression settings
+pattern_compression:
+  enabled: true
+  threshold: 3              # Min decisions to compress into pattern
+  min_confidence: 0.8       # Minimum confidence score
+  auto_compress: true       # Automatically compress when threshold met
+
+# Decision record requirements
+decision_records:
+  required_for:
+    - authentication        # Auth changes always documented
+    - authorization         # Permission changes
+    - api_contracts         # Schema/endpoint changes
+    - security              # Security implementations
+    - architecture          # Structural changes
+    
+  skip_for:
+    - bug_fixes             # Simple fixes
+    - refactoring           # Code cleanup
+    - documentation         # Docs only
+    - minor_tweaks          # Configuration changes
+
+# Integration settings
+integration:
+  github_actions: true      # Use .github/workflows/evidence.yml
+  git_hooks: false          # Pre-commit hooks (optional)
+  
+# Output settings
+output:
+  auto_evidence_dir: ".ai/auto"
+  decision_records_dir: ".ai/decision-records"
+  patterns_dir: ".ai/patterns"
+  
+---
+
+# Domain-Specific Overrides
+
+# For frontend projects, uncomment and adjust:
+# domain: frontend
+# evidence_weights:
+#   visual_test:
+#     weight: 5
+#     confidence_multiplier: 1.0
+#     description: "Visual regression tests are gold standard"
+#   integration_test:
+#     weight: 3
+#     confidence_multiplier: 0.7
+#     description: "DOM tests can be brittle"
+
+# For data science projects:
+# domain: data_science
+# evidence_weights:
+#   data_validation:
+#     weight: 5
+#     confidence_multiplier: 1.0
+#   model_metrics:
+#     weight: 5
+#   unit_test:
+#     weight: 2
+
+---
+
+Last updated: 2026-06-20
