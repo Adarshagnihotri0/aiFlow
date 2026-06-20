@@ -1,0 +1,29 @@
+{
+  "name": "@adarsh/ai-runtime",
+  "version": "0.1.0",
+  "description": "AI Runtime Intelligence - Lightweight observability SDK for AI systems",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node dist/tests/sdk.test.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "runtime",
+    "observability",
+    "execution-traces",
+    "developer-intelligence"
+  ],
+  "author": "Adarsh Agnihotri",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
