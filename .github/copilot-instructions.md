@@ -141,6 +141,43 @@ const a = users.filter(u => u.a);  // Unclear what 'a' means
 
 ---
 
+## Architecture Evidence Rule
+
+**Before proposing a new abstraction, provide:**
+
+1. **Exact file(s)** - Where is the problem?
+2. **Exact line(s)** - What specific code?
+3. **Exact violation(s)** - What boundary crossed?
+4. **Measured frequency** - How many occurrences?
+5. **Expected improvement** - What will change?
+
+**If any evidence is missing:**
+```
+Status = HYPOTHESIS
+
+Do not create new architectural layers.
+```
+
+**Why this matters:**
+
+Creating abstractions before validating the problem is the most common architectural failure mode.
+
+Example (MessageService mistake):
+```
+❌ BAD:
+Assumption: "Message routes violate BC-006"
+Missing: Actual audit of message routes
+Result: Created service for wrong problem
+
+✅ GOOD:
+Audit: Trace routes have db imports (lines 208, 458)
+Measure: 2 violations in server.ts
+Action: Create TraceService
+Result: 2 BC-006 violations resolved
+```
+
+---
+
 ## Rule Creation Filter
 
 Before adding a constitutional rule:
@@ -588,7 +625,7 @@ Architectural change with 0 violations reduced + 3+ docs created
 
 The constitution is a constrained resource.
 
-Before adding a new rule:
+**Before adding a new rule:**
 
 1. **Ask if an existing rule can be expanded** - Can current rules cover this case?
 2. **Ask if the lesson belongs in examples** - Is this repository-specific?
@@ -597,6 +634,8 @@ Before adding a new rule:
 **Target:** Constitution grows slower than examples.
 
 **Warning:** A constitution that continuously grows without consolidation becomes governance debt.
+
+**This rule governs governance itself - highest leverage.**
 
 ---
 

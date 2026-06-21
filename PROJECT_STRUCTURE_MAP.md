@@ -494,6 +494,25 @@ SDK usage → sdk/README.md
 
 ---
 
+## ARCHITECTURAL STATE TRACKING
+
+### Service Layer
+
+| Aspect | Current | Target | Confidence | Last Verified |
+|--------|---------|--------|------------|---------------|
+| **Services** | 1 (trace-service.ts) | 1-2 (trace only, message if needed) | ★★★★★ | 2026-06-22 |
+| **BC-006 Violations** | 0 | 0 | ★★★★★ | 2026-06-22 |
+| **Integration** | ✅ trace-service.ts | Stable | ★★★★★ | 2026-06-22 |
+
+**Confidence Levels:**
+- ★★★★★ (5/5) - Audited, verified, tested
+- ★★★★☆ (4/5) - Audited, not yet tested in production
+- ★★★☆☆ (3/5) - Designed, not implemented
+- ★★☆☆☆ (2/5) - Hypothesis, needs evidence
+- ★☆☆☆☆ (1/5) - Speculative
+
+---
+
 ## DOCUMENTATION-TO-CODE RATIO TRACKING
 
 ### Current Metrics
