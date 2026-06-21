@@ -55,7 +55,52 @@ $ npm run lint
 
 ---
 
-## Confidence Levels
+## Verified Facts vs Confidence Assessments
+
+### Verified Facts (Not Confidence-Based)
+Report deterministic results separately:
+
+```markdown
+## Validation Evidence
+
+**TypeScript:** PASS (0 errors)
+- Command: `npm run typecheck`
+- Exit code: 0
+
+**Tests:** PASS (9/9)
+- Test runner output attached
+
+**ESLint:** 0 errors, 23 warnings
+- Command output: `✖ 23 problems (0 errors, 23 warnings)`
+```
+
+### Confidence Assessments (For Uncertain Claims)
+Use ★★★★★ for architectural judgments:
+
+```
+## Architectural Claims
+
+**Claim:** Module structure will scale to 100+ files
+**Confidence:** ★★★☆☆ (Medium)
+**Reasoning:** Based on similar patterns in codebases with 50-150 files
+
+**Claim:** No architectural drift will occur
+**Confidence:** ★★☆☆☆ (Low)
+**Risk:** Without fitness functions, violations likely over time
+```
+
+**DO NOT use confidence for:**
+- Test results (verified)
+- Lint errors (deterministic)
+- Build status (pass/fail)
+
+**USE confidence for:**
+- Scalability predictions
+- Maintainability claims  
+- Future risk assessments
+- Pattern appropriateness
+
+---
 
 Use 5-star confidence for architectural claims:
 

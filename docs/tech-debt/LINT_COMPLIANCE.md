@@ -43,12 +43,12 @@ The repository enforces coding standards through:
 **Resolution Status:**
 - **145 issues removed** (100% error reduction)
 - **Method:** 56% fixed in code, 41% suppressed with justification, 3% false positives
+- **Suppression tracking:** See `docs/tech-debt/ESLINT_OVERRIDES.md`
 
 **Trajectory:**
 ```
 Start:  145 errors, 23 warnings
 Final:    0 errors, 23 warnings
-Velocity: 72.5 errors/hour
 Trend:    100% error reduction achieved
 ```
 

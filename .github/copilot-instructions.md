@@ -218,11 +218,23 @@ try {
 A task is **NOT done** until:
 1. ✅ Tests pass (with actual output pasted)
 2. ✅ TypeCheck passes
-3. ✅ Lint passes
+3. ✅ Lint passes **0 errors**
 4. ✅ Build succeeds
 5. ✅ No assumptions made silently
 
 **Required:** Paste actual command output, not summaries like "tests should pass".
+
+### Compliance Thresholds
+
+**COMPLETE** = 0 errors, warnings within policy  
+**SUBSTANTIALLY COMPLETE** = 0 errors, warnings need review  
+**IN PROGRESS** = Errors exist  
+**NON-COMPLIANT** = Critical violations
+
+**Warning Policy:**
+- Warnings are tracked, not blockers
+- Warning trend must not increase
+- New warnings require justification
 
 ---
 
