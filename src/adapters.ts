@@ -2,7 +2,7 @@
 // Best tool use + agentic capability in the Nova family.
 // Price: ~$0.80/1M input tokens. EOL: not announced.
 const region = process.env.AWS_REGION ?? 'ap-south-1';
-const profilePrefix = region.startsWith('eu-')
+const _profilePrefix = region.startsWith('eu-')
   ? 'eu'
   : region.startsWith('ap-')
     ? 'apac'
@@ -11,7 +11,7 @@ const profilePrefix = region.startsWith('eu-')
 //export const STATIC_MODEL_ID = `${profilePrefix}.deepseek.v3.2`;
 export const STATIC_MODEL_ID = `zai.glm-5`
 // ── Anthropic content block → Converse ContentBlock ─────────────────────────
-function toConverseContent(content: unknown) {
+function toConverseContent(content: unknown): Record<string, unknown>[] {
   if (typeof content === 'string') {
     return content.trim() ? [{ text: content }] : [];  // ← Skip if empty
   }
@@ -36,13 +36,13 @@ function toConverseContent(content: unknown) {
                 const t = String(c['text'] ?? '').trim();
                 return t ? { text: t } : null;
               })
-              .filter(Boolean)
+              .filter((item): item is { text: string } => item !== null)
             : (raw ? [{ text: String(raw) }] : []);
         return inner.length ? { toolResult: { toolUseId: block['tool_use_id'], content: inner } } : null;
       }
       return null;  // ← Don't create empty text blocks
     })
-    .filter(Boolean);  // ← Remove null entries
+    .filter((item) => item !== null) as Record<string, unknown>[];  // ← Remove null entries
 }
 
 /** Convert Anthropic request body to Bedrock ConverseCommand input */
@@ -230,7 +230,7 @@ export function fromConverseResponseOpenAI(response: Record<string, unknown>): R
   const toolCalls: Record<string, unknown>[] = [];
 
   for (const block of raw) {
-    if (block['text'] !== undefined) textContent += block['text'];
+    if (block['text'] !== undefined && typeof block['text'] === 'string') textContent += block['text'];
     if (block['toolUse']) {
       const tu = block['toolUse'] as Record<string, unknown>;
       toolCalls.push({
@@ -252,8 +252,8 @@ export function fromConverseResponseOpenAI(response: Record<string, unknown>): R
     model: STATIC_MODEL_ID,
     choices: [{ index: 0, message: messageOut, finish_reason: finishReason }],
     usage: {
-      prompt_tokens: usage?.['inputTokens'] ?? 0,
-      completion_tokens: usage?.['outputTokens'] ?? 0,
+      prompt_tokens: (usage?.['inputTokens'] as number) ?? 0,
+      completion_tokens: (usage?.['outputTokens'] as number) ?? 0,
       total_tokens: ((usage?.['inputTokens'] as number) ?? 0) + ((usage?.['outputTokens'] as number) ?? 0),
     },
   };

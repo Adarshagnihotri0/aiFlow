@@ -136,7 +136,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 // ── Trace ingestion endpoint for SDK clients ─────────────────────────────────────
-app.post('/trace', async (req, res) => {
+app.post('/trace', (req, res) => {
   try {
     const tracePayload = req.body;
     
@@ -244,19 +244,18 @@ app.get('/api/v1/context', async (req, res) => {
       return;
     }
 
-    const { existsSync, readFileSync } = await import('fs');
-    const { join, basename } = await import('path');
-    const { execSync } = await import('child_process');
+    const fs = await import('fs');
+    const path = await import('path');
+    const childProcess = await import('child_process');
     
     // 1. Derive project name (no config required)
-    let projectName = basename(root);
+    let projectName = path.basename(root);
     let packageJson: any = null;
     
-    if (existsSync(join(root, 'package.json'))) {
+    if (fs.existsSync(path.join(root, 'package.json'))) {
       try {
-        packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+        packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
         projectName = packageJson.name || projectName;
-        console.log('DEBUG: packageJson.main =', packageJson.main);
       } catch (e) {
         // Ignore parse errors
       }
@@ -268,15 +267,15 @@ app.get('/api/v1/context', async (req, res) => {
     let gitRemote = '';
     
     try {
-      gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
-      gitStatus = execSync('git status --short', { cwd: root, encoding: 'utf-8' }).trim();
-      gitRemote = execSync('git remote get-url origin 2>/dev/null || echo ""', { cwd: root, encoding: 'utf-8' }).trim();
+      gitBranch = childProcess.execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
+      gitStatus = childProcess.execSync('git status --short', { cwd: root, encoding: 'utf-8' }).trim();
+      gitRemote = childProcess.execSync('git remote get-url origin 2>/dev/null || echo ""', { cwd: root, encoding: 'utf-8' }).trim();
     } catch (e) {
       // Not a git repo or git not installed
     }
     
     // 3. Scan important files with metadata
-    const { readdirSync, statSync, readFileSync: readFile } = await import('fs');
+    const { readFileSync: readFile } = await import('fs');
     const importantFiles: Array<{ path: string; lines?: number; is_entry_point?: boolean }> = [];
     
     // Extract entry point from package.json
@@ -295,8 +294,8 @@ app.get('/api/v1/context', async (req, res) => {
       // Files to always include
       const criticalFiles = ['package.json', 'README.md', 'tsconfig.json', 'docker-compose.yml', 'Dockerfile'];
       criticalFiles.forEach(file => {
-        const fullPath = join(root, file);
-        if (existsSync(fullPath)) {
+        const fullPath = path.join(root, file);
+        if (fs.existsSync(fullPath)) {
           const lines = countLines(fullPath);
           importantFiles.push({ path: file, lines });
         }
@@ -304,11 +303,11 @@ app.get('/api/v1/context', async (req, res) => {
       
       // Scan root directory for JS/TS files (including entry point)
       try {
-        const rootFiles = readdirSync(root);
+        const rootFiles = fs.readdirSync(root);
         rootFiles.forEach(file => {
           if (/\.(js|ts|jsx|tsx)$/.test(file)) {
-            const fullPath = join(root, file);
-            const stat = statSync(fullPath);
+            const fullPath = path.join(root, file);
+            const stat = fs.statSync(fullPath);
             if (stat.isFile()) {
               const lines = countLines(fullPath);
               const isEntryPoint = entryPoint && entryPoint === file;
@@ -320,7 +319,9 @@ app.get('/api/v1/context', async (req, res) => {
             }
           }
         });
-      } catch (e) {}
+      } catch (e) {
+        // Ignore git/traverse errors - not critical
+      }
       
       // Mark entry point if found in package.json (already added above)
       if (entryPoint) {
@@ -332,16 +333,16 @@ app.get('/api/v1/context', async (req, res) => {
       }
       
       // Scan src/ directory if exists
-      const srcDir = join(root, 'src');
-      if (existsSync(srcDir)) {
+      const srcDir = path.join(root, 'src');
+      if (fs.existsSync(srcDir)) {
         const scanDir = (dir: string, prefix: string = '') => {
           try {
-            const entries = readdirSync(dir);
+            const entries = fs.readdirSync(dir);
             entries.forEach(entry => {
               if (entry.startsWith('.') || entry === 'node_modules') return;
               
-              const fullPath = join(dir, entry);
-              const stat = statSync(fullPath);
+              const fullPath = path.join(dir, entry);
+              const stat = fs.statSync(fullPath);
               const relativePath = prefix ? `${prefix}/${entry}` : entry;
               
               if (stat.isDirectory()) {
@@ -361,7 +362,9 @@ app.get('/api/v1/context', async (req, res) => {
                 });
               }
             });
-          } catch (e) {}
+          } catch (e) {
+            // Ignore file stat errors - file may not exist or be inaccessible
+          }
         };
         scanDir(srcDir);
       }
@@ -376,7 +379,7 @@ app.get('/api/v1/context', async (req, res) => {
       importantFiles.forEach((file: any) => {
         if (file.path && file.lines && file.lines < 500) {  // Only preview files < 500 lines
           try {
-            const fullPath = join(root, file.path);
+            const fullPath = path.join(root, file.path);
             const content = fs.readFileSync(fullPath, 'utf-8');
             const previewLines = content.split('\n').slice(0, 20);
             file.preview = previewLines.join('\n');

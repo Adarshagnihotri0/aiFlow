@@ -21,10 +21,10 @@ export interface PromptComponent {
  */
 export function buildPrompt(
   components: PromptComponent[],
-  context: ExecutionContext
+  _context: ExecutionContext
 ): Array<{ role: string; content: string }> {
   // Log prompt construction
-  const totalLength = components.reduce((sum, c) => sum + c.content.length, 0);
+  const _totalLength = components.reduce((sum, c) => sum + c.content.length, 0);
   
   return components.map(component => ({
     role: component.role,
@@ -39,19 +39,23 @@ export function buildPrompt(
 export function extractMessages(body: Record<string, unknown>): PromptComponent[] {
   const messages = body['messages'];
   
-  if (!messages || !Array.isArray(messages)) {
+  if (!Array.isArray(messages)) {
     return [];
   }
   
   return messages
-    .filter((msg): msg is PromptComponent => 
-      typeof msg === 'object' && 
-      msg !== null &&
-      'role' in msg && 
-      'content' in msg &&
-      (msg.role === 'system' || msg.role === 'user' || msg.role === 'assistant') &&
-      typeof msg.content === 'string'
-    );
+    .filter((msg): msg is PromptComponent => {
+      if (typeof msg !== 'object' || msg === null) {
+        return false;
+      }
+      const m = msg as Record<string, unknown>;
+      return (
+        'role' in m && 
+        'content' in m &&
+        (m.role === 'system' || m.role === 'user' || m.role === 'assistant') &&
+        typeof m.content === 'string'
+      );
+    });
 }
 
 /**
