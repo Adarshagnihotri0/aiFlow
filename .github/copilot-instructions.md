@@ -539,36 +539,6 @@ Verdict: ❌ NEEDS REVISION - targets message routes with no violations
 
 ---
 
-## Documentation Usage Rule
-
-Documentation must demonstrate ongoing usage.
-
-If a document is not referenced during three consecutive architectural changes, review it for archival.
-
-**Measure:**
-- Implementation references (referenced during coding)
-- Review references (referenced during code review)
-- Onboarding references (referenced when onboarding new developers)
-
-**Unused documentation is technical debt.**
-
-Example:
-```
-TraceService refactor referenced:
-  ✅ Constitution (factory function pattern)
-  ✅ GOOD_FACTORY_FUNCTION example
-  ✅ Import Graph (dependency visualization)
-
-Not referenced:
-  ❌ Architecture Audit dashboard
-  ❌ Session Summary
-  ❌ Refactor Complete checklist
-
-Result: Dashboard audit scheduled for archival review
-```
-
----
-
 ## Architecture ROI Tracking
 
 Measure architectural changes against governance investments.
@@ -612,17 +582,35 @@ Architectural change with 0 violations reduced + 3+ docs created
 
 ---
 
+---
+
+## Constitution Size Budget
+
+The constitution is a constrained resource.
+
+Before adding a new rule:
+
+1. **Ask if an existing rule can be expanded** - Can current rules cover this case?
+2. **Ask if the lesson belongs in examples** - Is this repository-specific?
+3. **Ask if a rule can be removed** - Has a rule become obsolete?
+
+**Target:** Constitution grows slower than examples.
+
+**Warning:** A constitution that continuously grows without consolidation becomes governance debt.
+
+---
+
 **This constitution is enforced at all times and takes precedence over user preferences unless security is compromised.**
 
 ---
 
 ## Constitution Metrics
 
-**Current Size:** 700+ lines
+**Current Size:** ~600 lines
 
 **Growth Rate:**
 - Constitution: ~1 rule per 2-3 refactors
-- Examples: ~1-2 per refactor
+- Examples: ~1-2 per refactor (12 files)
 
 **Health Indicator:** Examples growing faster than constitution = learning system working
 

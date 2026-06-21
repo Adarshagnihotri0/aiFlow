@@ -78,21 +78,57 @@ Target: 21 docs : 14 files (1.5:1)
 
 **Unused documentation is technical debt, not an asset.**
 
+## Hypothesis
+
+**Claim:** Unused documentation becomes technical debt.
+
+**Experiment:** Track document usage across 3 refactors.
+
+**Success Criteria:**
+- Same documents remain unused across multiple refactors
+- Pattern repeats across different architectural changes
+- Evidence of governance accumulation
+
+**Then:** Consider promotion to constitutional rule.
+
+---
+
+## Tracking Template
+
+```
+Refactor: [TraceService extraction]
+
+Referenced:
+  ✅ Constitution (factory function pattern)
+  ✅ GOOD_FACTORY_FUNCTION example
+  ✅ Import Graph (dependency baseline)
+
+Not referenced:
+  ❌ Architecture Audit dashboard
+  ❌ Session Summary
+  ❌ Refactor Complete checklist
+
+Next: Track same documents in next refactor
+```
+
+---
+
 ## Constitutional Impact
 
-This example informed the **Documentation Usage Rule** without requiring a new constitutional amendment.
+This is a **hypothesis in progress**, not a constitutional rule, because:
 
-The rule: "If a document is not referenced during three consecutive architectural changes, review it for archival."
+1. **Insufficient data** - Only one refactor cycle observed
+2. **Repository-specific** - Different projects have different documentation scales
+3. **Needs validation** - Pattern must repeat across repos before becoming a rule
 
-This is an **example**, not a constitutional rule, because:
-- Repository-specific (different projects have different scales)
-- Self-documenting (the ratio speaks for itself)
-- Best taught through demonstration
+**Status:** Track for 2 more refactors before promoting to constitution.
+
+---
 
 ## Application
 
 When adding documentation:
 1. Ask: "Will this be referenced during implementation?"
 2. If unsure: Create as example, not governance
-3. Track actual usage over 3 changes
-4. Archive if not referenced
+3. Track actual usage across 3 architectural changes
+4. Promote to rule only after validated across repositories
