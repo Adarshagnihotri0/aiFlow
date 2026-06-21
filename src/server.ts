@@ -256,6 +256,7 @@ app.get('/api/v1/context', async (req, res) => {
       try {
         packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
         projectName = packageJson.name || projectName;
+        console.log('DEBUG: packageJson.main =', packageJson.main);
       } catch (e) {
         // Ignore parse errors
       }
@@ -276,7 +277,10 @@ app.get('/api/v1/context', async (req, res) => {
     
     // 3. Scan important files with metadata
     const { readdirSync, statSync, readFileSync: readFile } = await import('fs');
-    const importantFiles: Array<{ path: string; lines?: number }> = [];
+    const importantFiles: Array<{ path: string; lines?: number; is_entry_point?: boolean }> = [];
+    
+    // Extract entry point from package.json
+    const entryPoint = packageJson?.main || null;
     
     const countLines = (filePath: string): number => {
       try {
@@ -298,6 +302,35 @@ app.get('/api/v1/context', async (req, res) => {
         }
       });
       
+      // Scan root directory for JS/TS files (including entry point)
+      try {
+        const rootFiles = readdirSync(root);
+        rootFiles.forEach(file => {
+          if (/\.(js|ts|jsx|tsx)$/.test(file)) {
+            const fullPath = join(root, file);
+            const stat = statSync(fullPath);
+            if (stat.isFile()) {
+              const lines = countLines(fullPath);
+              const isEntryPoint = entryPoint && entryPoint === file;
+              importantFiles.push({ 
+                path: file, 
+                lines,
+                is_entry_point: isEntryPoint
+              });
+            }
+          }
+        });
+      } catch (e) {}
+      
+      // Mark entry point if found in package.json (already added above)
+      if (entryPoint) {
+        importantFiles.forEach(file => {
+          if (file.path === entryPoint) {
+            file.is_entry_point = true;
+          }
+        });
+      }
+      
       // Scan src/ directory if exists
       const srcDir = join(root, 'src');
       if (existsSync(srcDir)) {
@@ -315,7 +348,17 @@ app.get('/api/v1/context', async (req, res) => {
                 scanDir(fullPath, relativePath);
               } else if (stat.isFile() && /\.(ts|js|jsx|tsx|py|go|rs)$/.test(entry)) {
                 const lines = countLines(fullPath);
-                importantFiles.push({ path: `src/${relativePath}`, lines });
+                const filePath = `src/${relativePath}`;
+                const isEntryPoint = entryPoint && (
+                  entryPoint === filePath ||
+                  entryPoint.replace(/^dist\//, 'src/') === filePath ||
+                  entryPoint.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts') === filePath
+                );
+                importantFiles.push({ 
+                  path: filePath, 
+                  lines,
+                  is_entry_point: isEntryPoint
+                });
               }
             });
           } catch (e) {}

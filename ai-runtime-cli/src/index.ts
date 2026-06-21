@@ -134,7 +134,8 @@ function formatMarkdown(ctx: any): string {
         md += `- ${file}\n`;
       } else {
         const lineInfo = file.lines ? ` (${file.lines} lines)` : '';
-        md += `- ${file.path}${lineInfo}\n`;        
+        const entryPointMarker = file.is_entry_point ? ' [ENTRY POINT]' : '';
+        md += `- ${file.path}${lineInfo}${entryPointMarker}\n`;        
         // Show preview if available
         if (file.preview) {
           md += '```\n' + file.preview + '\n```\n';

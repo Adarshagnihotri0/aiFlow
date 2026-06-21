@@ -19,10 +19,9 @@
   "author": "Adarsh Agnihotri",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^20.19.43",
     "typescript": "^5.4.5"
   },
-  "dependencies": {},
   "engines": {
     "node": ">=18.0.0"
   }
