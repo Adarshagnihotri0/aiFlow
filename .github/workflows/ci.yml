@@ -27,8 +27,14 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
+    - name: Install SDK dependencies
+      run: cd sdk && npm ci
+
     - name: TypeScript typecheck
       run: npm run typecheck
+
+    - name: Build SDK (required for tests)
+      run: npm run build:sdk
 
     - name: Run tests
       run: npm test
