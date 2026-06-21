@@ -1,12 +1,17 @@
 /**
- * ExecutionTrace - Stage timing for request execution
+ * ExecutionTrace - Server internal request tracing
  * 
- * Phase 2 minimal scope: ONLY tracks stage durations
- * - routing
- * - prompt_build
- * - adapter (LLM call)
+ * Standalone implementation for server traces with:
+ * - Route type restrictions (anthropic, openai, legacy)
+ * - DB serialization (toRow)
+ * - Stage-duration aggregation for total_ms
+ * 
+ * Used by: Express middleware for internal request tracing
  */
 
+/**
+ * Stage record - Individual timing stage within a trace
+ */
 export interface StageRecord {
   name: string;
   start_time: number;
@@ -14,17 +19,30 @@ export interface StageRecord {
   duration_ms: number;
 }
 
+/**
+ * Trace status
+ */
+export type TraceStatus = 'success' | 'error' | 'timeout';
+
+/**
+ * Server route classification
+ */
+export type ServerRouteType = 'anthropic' | 'openai' | 'legacy';
+
+/**
+ * Execution trace payload (server-internal)
+ */
 export interface ExecutionTrace {
   trace_id: string;
-  route: 'anthropic' | 'openai' | 'legacy';
+  route: ServerRouteType;
   stages: StageRecord[];
   total_ms: number;
-  status: 'success' | 'error' | 'timeout';
+  status: TraceStatus;
   error_message?: string;
 }
 
 /**
- * Convert ExecutionTrace to flat format for DB insertion
+ * Flat format for DB insertion
  */
 export interface ExecutionTraceRow {
   trace_id: string;
@@ -39,10 +57,10 @@ export interface ExecutionTraceRow {
 }
 
 /**
- * ExecutionTraceBuilder - Zero-overhead stage timing
+ * ExecutionTraceBuilder - Server internal tracing with route validation
  * 
  * Usage:
- *   const trace = new ExecutionTraceBuilder(trace_id);
+ *   const trace = new ExecutionTraceBuilder(trace_id, 'anthropic');
  *   trace.start("routing");
  *   // ... work ...
  *   trace.end("routing");
@@ -50,26 +68,27 @@ export interface ExecutionTraceRow {
  */
 export class ExecutionTraceBuilder {
   private trace_id: string;
-  private route: 'anthropic' | 'openai' | 'legacy';
+  private route: ServerRouteType;
   private stages: StageRecord[] = [];
   private currentStage: { name: string; start: number } | null = null;
-  private status: 'success' | 'error' | 'timeout' = 'success';
+  private status: TraceStatus = 'success';
   private error_message?: string;
 
-  constructor(trace_id: string, route: 'anthropic' | 'openai' | 'legacy') {
+  constructor(trace_id: string, route: ServerRouteType) {
     this.trace_id = trace_id;
     this.route = route;
   }
 
-  setError(message: string): void {
-    this.status = 'error';
-    this.error_message = message;
-  }
-
+  /**
+   * Start timing a stage
+   */
   start(name: string): void {
     this.currentStage = { name, start: Date.now() };
   }
 
+  /**
+   * End timing a stage
+   */
   end(name: string): void {
     if (!this.currentStage || this.currentStage.name !== name) {
       throw new Error(`Stage mismatch: expected ${this.currentStage?.name}, got ${name}`);
@@ -86,6 +105,39 @@ export class ExecutionTraceBuilder {
     this.currentStage = null;
   }
 
+  /**
+   * Mark trace as error
+   */
+  setError(message: string): void {
+    this.status = 'error';
+    this.error_message = message;
+  }
+
+  /**
+   * Mark trace as timeout
+   */
+  setTimeout(): void {
+    this.status = 'timeout';
+  }
+
+  /**
+   * Get route type (server-restricted)
+   */
+  getRouteType(): ServerRouteType {
+    return this.route;
+  }
+
+  /**
+   * Get trace ID
+   */
+  getTraceId(): string {
+    return this.trace_id;
+  }
+
+  /**
+   * Complete trace and return payload
+   * Uses stage-duration aggregation for total_ms (not wall-clock)
+   */
   complete(): ExecutionTrace {
     return {
       trace_id: this.trace_id,
@@ -93,7 +145,7 @@ export class ExecutionTraceBuilder {
       stages: this.stages,
       total_ms: this.stages.reduce((sum, stage) => sum + stage.duration_ms, 0),
       status: this.status,
-      error_message: this.error_message
+      error_message: this.error_message,
     };
   }
 

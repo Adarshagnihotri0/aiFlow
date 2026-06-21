@@ -2,6 +2,30 @@
 
 A CLI that automatically generates AI-ready project context from any repository. Run `airuntime prep` to instantly give AI assistants perfect context - no more manual explanations.
 
+## Repository Architecture
+
+This repository contains multiple components:
+
+```
+developer-context-generator
+│
+├── airuntime CLI
+│   └── Generates AI-ready project context
+│
+├── @adarsh/ai-runtime SDK
+│   └── Lightweight tracing for external applications
+│
+├── Trace Collection Server
+│   ├── Express API server
+│   ├── AWS Bedrock proxy
+│   └── Context generation API
+│
+└── PostgreSQL Database
+    └── Stores execution traces
+```
+
+**Full architecture documentation:** `docs/architecture/README.md`
+
 ## Quick Start
 
 ```bash
@@ -115,7 +139,7 @@ AI-Ready Context
 
 ## Documentation
 
-- **PROJECT_EVOLUTION.md** - Complete history and evolution
+- **docs/history/PROJECT_EVOLUTION.md** - Complete history and evolution
 - **docs/README.md** - PRP workflow overview
 - **docs/QUICK_REFERENCE.md** - Developer cheat sheet
 

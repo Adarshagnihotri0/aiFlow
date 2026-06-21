@@ -30,7 +30,7 @@ sdk/
 #### Manual Tracing
 
 ```typescript
-import { trace, sendTrace } from 'mcp-trace-sdk';
+import { trace, sendTrace } from '@adarsh/ai-runtime';
 
 const t = trace('my-operation');
 t.start('validation');
@@ -42,13 +42,13 @@ await processData();
 t.end('processing');
 
 const payload = t.complete();
-await sendTrace(payload); // Sends to MCP Daemon via HTTP POST
+await sendTrace(payload); // Sends to server via HTTP POST
 ```
 
 #### Auto-Tracing
 
 ```typescript
-import { autoTrace } from 'mcp-trace-sdk';
+import { autoTrace } from '@adarsh/ai-runtime';
 
 const processedFn = autoTrace('operation', async (input) => {
   return doWork(input);
@@ -62,12 +62,12 @@ const result = await processedFn(data);
 
 Environment variables:
 ```bash
-export MCP_TRACE_ENDPOINT=http://localhost:3000/trace
+export AI_RUNTIME_ENDPOINT=http://localhost:3000/api/v1/traces
 ```
 
 Programmatic configuration:
 ```typescript
-import { configure } from 'mcp-trace-sdk';
+import { configure } from '@adarsh/ai-runtime';
 
 configure({
   endpoint: 'https://my-daemon.com/trace',
@@ -152,7 +152,7 @@ VERDICT: READY FOR INTEGRATION TESTING
 ### Express Middleware
 
 ```typescript
-import { trace, sendTrace } from 'mcp-trace-sdk';
+import { trace, sendTrace } from '@adarsh/ai-runtime';
 
 app.use(async (req, res, next) => {
   const t = trace('http-request', undefined, {
@@ -229,12 +229,12 @@ npm publish
 
 2. **Configure:**
    ```bash
-   export MCP_TRACE_ENDPOINT=http://localhost:3000/trace
+   export AI_RUNTIME_ENDPOINT=http://localhost:3000/api/v1/traces
    ```
 
 3. **Use:**
    ```typescript
-   import { autoTrace } from 'mcp-trace-sdk';
+   import { autoTrace } from '@adarsh/ai-runtime';
    
    const myFn = autoTrace('test', async () => {
      return 'Hello';
