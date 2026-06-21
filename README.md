@@ -1,6 +1,37 @@
 # Developer Context Generator
 
-A CLI that automatically generates AI-ready project context from any repository. Run `airuntime prep` to instantly give AI assistants perfect context - no more manual explanations.
+**Get perfect AI context in 30 seconds.** Run `airuntime prep` to give AI assistants everything they need - no more manual explanations.
+
+---
+
+## New to This Repo? Start Here
+
+**Read in this order:**
+
+1. **README** (this file) - Project overview and quick start
+2. **Constitution** (`.github/copilot-instructions.md`) - Engineering rules (5-10 min read)
+3. **Architecture Scorecard** (`docs/architecture/ARCHITECTURE_SCORECARD.md`) - Current health metrics
+
+**That's it. 15 minutes to productive.**
+
+### If You're Refactoring
+
+4. **Examples/patterns/** - Reusable patterns (e.g., `GOOD_FACTORY_FUNCTION.md`)
+5. **Architecture Evidence Rule** - Read before creating new layers
+
+### If You're Investigating
+
+4. **Examples/retrospectives/** - Learn from actual refactoring sessions
+5. **PROJECT_STRUCTURE_MAP.md** - Complete file inventory
+
+### If You're Onboarding
+
+**Your first task:** Add a new endpoint
+- Estimated time: 20-30 minutes (with these docs)
+- Required reading: README + Sections 1-3 above
+- Success criteria: Endpoint works, tests pass, no boundary violations
+
+---
 
 ## Repository Architecture
 

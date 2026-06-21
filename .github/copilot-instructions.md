@@ -2,6 +2,11 @@
 
 These principles apply to ALL code in this repository and cannot be overridden.
 
+**Quick Navigation:**
+- New to this repo? **Read README first**, then this file.
+- See `docs/architecture/ARCHITECTURE_SCORECARD.md` for current metrics.
+- See `docs/examples/` for concrete patterns.
+
 ---
 
 ## Rule Priority (Decision Hierarchy)
@@ -196,6 +201,44 @@ Before adding a constitutional rule:
 - Define enforcement mechanism
 
 **This prevents rule accumulation.**
+
+---
+
+## Governance Graduation Rule
+
+A rule is not considered validated until it has changed a decision in at least two independent architecture iterations.
+
+**Process:**
+```
+Iteration 1:
+  Create hypothesis → Add to examples
+
+Iteration 2:
+  Observe reuse → Track evidence
+
+Iteration 3:
+  Validate pattern → Promote to constitution
+```
+
+**Rule Status:**
+- ✅ **Validated** - Changed decisions in 2+ iterations
+- ⚠️ **Testing** - Observed in 1 iteration
+- 🧪 **Hypothesis** - Not yet observed
+
+**Anti-pattern:** Promoting lessons directly to rules without observation.
+
+Example:
+```
+✅ Governance ROI Rule:
+  Iteration 1: Created as example
+  Iteration 2: Applied to TraceService refactor
+  Iteration 3: Validated, promoted to constitution
+
+❌ Documentation Usage Rule:
+  Iteration 1: Created as constitutional rule
+  Evidence: Only 1 refactor observed
+  Status: Demoted to examples (hypothesis)
+```
 
 ---
 
@@ -649,8 +692,15 @@ The constitution is a constrained resource.
 
 **Growth Rate:**
 - Constitution: ~1 rule per 2-3 refactors
-- Examples: ~1-2 per refactor (12 files)
+- Examples: ~1-2 per refactor
 
-**Health Indicator:** Examples growing faster than constitution = learning system working
+**Rule Validation Status:**
+- ✅ Architecture Evidence Rule: Validated (prevented MessageService mistake)
+- ✅ Rule Creation Filter: Validated (demoted Documentation Usage Rule)
+- ✅ Governance ROI Rule: Validated (measured TraceService ROI)
+- ⚠️ Constitution Size Budget: Testing (recently added)
+- 🧪 Documentation Usage: Hypothesis (moved to examples)
 
-**Warning Indicator:** Constitution growing faster than examples = governance accumulation
+**Health Indicator:** Examples growing faster than constitution + rules validated through iterations
+
+**Warning Indicator:** Constitution growing faster than examples OR rules created without validation
