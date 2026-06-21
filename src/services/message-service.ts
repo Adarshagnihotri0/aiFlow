@@ -69,18 +69,17 @@ export function createMessageService(adapters: MessageAdapters): MessageService 
           if (streaming) {
             await adapters.invokeAnthropicStream(body, res);
           } else {
-            const result = await adapters.invokeAnthropic(body);
-            // Response sent by caller
+            await adapters.invokeAnthropic(body);
           }
         } else if (route === 'openai' || route === 'legacy') {
           if (streaming) {
             await adapters.invokeOpenAIStream(body, res);
           } else {
-            const result = await adapters.invokeOpenAI(body);
-            // Response sent by caller
+            await adapters.invokeOpenAI(body);
           }
         } else {
-          throw new Error(`Unknown route: ${route}`);
+          const exhaustive: never = route;
+          throw new Error(`Unknown route: ${String(exhaustive)}`);
         }
 
         // Persistence: Trace recording (previously skip-layer violation)

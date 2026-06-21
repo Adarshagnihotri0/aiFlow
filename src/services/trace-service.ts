@@ -15,12 +15,28 @@
 import type { ExecutionTraceRow } from '../types/trace';
 
 /**
+ * Database row structure from execution_traces table
+ */
+interface TraceDatabaseRow {
+  trace_id: string;
+  route: string;
+  routing_ms: number | null;
+  prompt_build_ms: number | null;
+  adapter_ms: number | null;
+  total_ms: number | null;
+  status: string;
+  error_message: string | null;
+  project_root: string | null;
+  created_at: Date;
+}
+
+/**
  * Dependencies for trace service
  */
 export interface TraceServiceDeps {
   saveTraceAsync: (trace: ExecutionTraceRow) => void;
   getPool: () => {
-    query: (sql: string, params: any[]) => Promise<{ rows: any[] }>;
+    query: (sql: string, params: unknown[]) => Promise<{ rows: TraceDatabaseRow[] }>;
   };
 }
 
@@ -51,7 +67,20 @@ export interface TraceService {
   };
   getTrace: (traceId: string) => Promise<{
     found: boolean;
-    trace?: any;
+    trace?: {
+      trace_id: string;
+      route: string;
+      timing: {
+        routing_ms: number | null;
+        prompt_build_ms: number | null;
+        adapter_ms: number | null;
+        total_ms: number | null;
+      };
+      status: string;
+      error_message: string | null;
+      project_root: string | null;
+      created_at: Date;
+    };
     error?: string;
   }>;
 }
@@ -118,22 +147,22 @@ export function createTraceService(deps: TraceServiceDeps): TraceService {
           return { found: false, error: 'Trace not found' };
         }
 
-        const trace = result.rows[0];
+        const row = result.rows[0];
 
         // Format for readability
         const formatted = {
-          trace_id: trace.trace_id,
-          route: trace.route,
+          trace_id: row.trace_id,
+          route: row.route,
           timing: {
-            routing_ms: trace.routing_ms,
-            prompt_build_ms: trace.prompt_build_ms,
-            adapter_ms: trace.adapter_ms,
-            total_ms: trace.total_ms
+            routing_ms: row.routing_ms,
+            prompt_build_ms: row.prompt_build_ms,
+            adapter_ms: row.adapter_ms,
+            total_ms: row.total_ms
           },
-          status: trace.status,
-          error_message: trace.error_message,
-          project_root: trace.project_root,
-          created_at: trace.created_at
+          status: row.status,
+          error_message: row.error_message,
+          project_root: row.project_root,
+          created_at: row.created_at
         };
 
         return { found: true, trace: formatted };

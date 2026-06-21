@@ -184,7 +184,7 @@ app.post('/trace', (req, res) => {
 });
 
 // ── Versioned trace endpoint (canonical) ────────────────────────────────────────
-app.post('/api/v1/traces', async (req, res) => {
+app.post('/api/v1/traces', (req, res) => {
   try {
     const tracePayload = req.body;
     

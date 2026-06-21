@@ -501,6 +501,38 @@ A task is **NOT done** until:
 
 ---
 
+## Refactor Success Criteria
+
+A refactor is complete only if:
+
+- ✅ **Complexity decreases** - Fewer lines or simpler structure
+- ✅ **Violations decrease** - Boundary violations reduced
+- ✅ **Tests pass** - All tests still passing
+- ✅ **Build passes** - TypeScript compilation successful
+- ✅ **Lint passes** - 0 errors
+
+**Creating new files alone is not a successful refactor.**
+
+Example:
+```
+❌ MessageService extraction:
+  - New file created ✅
+  - Violations unchanged ❌ (0 → 0)
+  - Not integrated ⚠️
+  
+  Result: INCOMPLETE
+
+✅ TraceService extraction:
+  - New file created ✅
+  - Violations reduced ✅ (2 → 0)
+  - Integrated ✅
+  - Tests pass ✅
+  
+  Result: COMPLETE
+```
+
+---
+
 ## How to Structure Work
 
 Break features into tasks with explicit tags:
