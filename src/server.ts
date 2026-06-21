@@ -3,9 +3,15 @@ import { invokeModel, invokeModelStream, invokeModelOpenAI, invokeModelStreamOpe
 import { AVAILABLE_MODELS, STATIC_MODEL_ID } from './adapters';
 import { contextMiddleware } from './middleware/context';
 import { createContextLogger } from './utils/logger';
+import { createTraceService } from './services/trace-service';
+import { saveTraceAsync } from './db/save-trace-async';
+import { getPool } from './db/client';
 import './types/context'; // Import to augment Express namespace
 
 const app = express();
+
+// Initialize trace service with dependency injection
+const traceService = createTraceService({ saveTraceAsync, getPool });
 app.use(express.json({ limit: '10mb' }));
 app.use(contextMiddleware);
 
@@ -206,27 +212,9 @@ app.post('/api/v1/traces', async (req, res) => {
       project_root: tracePayload.project_root
     });
 
-    // Persist trace to database with project_root
-    const { saveTraceAsync } = await import('./db/save-trace-async');
-    const traceRow: import('./types/trace').ExecutionTraceRow = {
-      trace_id: tracePayload.trace_id,
-      route: tracePayload.route,
-      routing_ms: tracePayload.stages?.find((s: any) => s.name === 'routing')?.duration_ms || null,
-      prompt_build_ms: tracePayload.stages?.find((s: any) => s.name === 'prompt_build')?.duration_ms || null,
-      adapter_ms: tracePayload.stages?.find((s: any) => s.name === 'adapter')?.duration_ms || null,
-      total_ms: tracePayload.total_ms,
-      status: tracePayload.status,
-      error_message: tracePayload.error_message || null,
-      project_root: tracePayload.project_root || null
-    };
-    saveTraceAsync(traceRow);
-    
-    res.json({ 
-      status: 'ok', 
-      trace_id: tracePayload.trace_id,
-      received_at: new Date().toISOString(),
-      api_version: 'v1'
-    });
+    // Use trace service for persistence
+    const result = traceService.ingestTrace(tracePayload);
+    res.json({ status: 'ok', ...result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Trace ingestion error (v1):', message);
@@ -454,36 +442,14 @@ app.get('/api/v1/context', async (req, res) => {
 app.get('/api/v1/traces/:id', async (req, res) => {
   try {
     const traceId = req.params.id;
+    const result = await traceService.getTrace(traceId);
     
-    const { getPool } = await import('./db/client');
-    const pool = getPool();
-    
-    const result = await pool.query(
-      'SELECT * FROM execution_traces WHERE trace_id = $1',
-      [traceId]
-    );
-    
-    if (result.rows.length === 0) {
-      res.status(404).json({ error: 'Trace not found' });
+    if (!result.found) {
+      res.status(404).json({ error: result.error || 'Trace not found' });
       return;
     }
     
-    const trace = result.rows[0];
-    
-    // Format for readability
-    res.json({
-      trace_id: trace.trace_id,
-      route: trace.route,
-      timing: {
-        routing_ms: trace.routing_ms,
-        prompt_build_ms: trace.prompt_build_ms,
-        adapter_ms: trace.adapter_ms,
-        total_ms: trace.total_ms
-      },
-      status: trace.status,
-      error: trace.error_message || null,
-      timestamp: trace.created_at
-    });
+    res.json(result.trace);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Trace fetch error:', message);

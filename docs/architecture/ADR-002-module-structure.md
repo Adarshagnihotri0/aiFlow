@@ -14,69 +14,113 @@ The repository lacks a standardized module structure, which leads to:
 - Difficulty finding related code
 - Architectural drift over time
 
-Current structure is flat with utilities mixed with business logic, making it hard to understand system boundaries.
-
 ## Decision
 
-Adopt a **layered architecture** with clear module organization:
+Adopt a **layered architecture** with clear module organization.
 
-### Directory Structure
+---
 
+## Current State (2026-06-22)
+
+**Verified Structure:**
 ```
 src/
-├── controllers/      # HTTP request handlers (Express routes)
-│   └── [resource].ts # One controller per resource
-│
-├── services/         # Business logic
-│   └── [domain].ts   # Domain-focused services
-│
-├── repositories/     # Data access layer
-│   └── [entity].ts   # Database operations
-│
-├── adapters/         # External service integrations
-│   └── [service].ts  # Third-party API wrappers
-│
-├── types/           # TypeScript type definitions
-│   ├── api.ts       # API request/response types
-│   ├── domain.ts    # Domain model types
-│   └── context.ts    # Execution context types
-│
-├── utils/           # Pure utility functions
-│   ├── logger.ts    # Logging utilities
-│   └── validators.ts # Validation helpers
-│
-├── middleware/      # Express middleware
-│   └── context.ts   # Request context injection
-│
-├── constants/       # Configuration constants
-│   └── routes.ts    # Route definitions
-│
-└── db/              # Database infrastructure
-    ├── client.ts    # Connection pool
-    └── migrations/  # SQL migrations
+├── server.ts        # Transport layer (routing + orchestration)
+├── index.ts         # Bootstrap layer
+├── adapters.ts      # Format conversion (root level)
+├── bedrock.ts       # External adapter (root level)
+├── db/              # Repository layer
+│   ├── client.ts
+│   ├── save-trace.ts
+│   └── save-trace-async.ts
+├── middleware/      # Middleware layer
+│   └── context.ts
+├── types/          # Type definitions
+│   ├── api.ts
+│   ├── context.ts
+│   └── trace.ts
+└── utils/          # Pure utilities
+    ├── logger.ts
+    └── prompt-builder.ts
 ```
 
-### Layer Responsibilities
+**Current Issues:**
+- ❌ Missing services/ layer
+- ❌ Missing controllers/ layer  
+- ⚠️ Adapters at root level (not adapters/)
+- ⚠️ server.ts contains orchestration (should be in services/)
+- ⚠️ 2 skip-layer imports (server.ts → db/)
 
-**Controllers (Presentation Layer)**
+---
+
+## Target State
+
+**Desired Structure:**
+```
+src/
+├── bootstrap/
+│   └── index.ts
+├── transport/
+│   └── server.ts
+├── controllers/      # HTTP request handlers
+│   └── [resource].ts
+├── services/         # Business logic ( orchestration)
+│   └── message-service.ts
+├── repositories/     # Data access (renamed from db/)
+│   └── trace-repository.ts
+├── adapters/         # External integrations (moved)
+│   ├── bedrock.ts
+│   └── format-converters.ts
+├── types/
+├── utils/
+└── middleware/
+```
+
+---
+
+## Gap Analysis
+
+| Component | Status | Action Required |
+|-----------|--------|-----------------|
+| Bootstrap | ✅ EXISTS | Rename index.ts location |
+| Transport | ✅ EXISTS | Extract orchestration from server.ts |
+| Controllers | ❌ MISSING | Extract from server.ts (Phase 2) |
+| Services | ❌ MISSING | Extract from server.ts (Phase 1) |
+| Repositories | ⚠️ PARTIAL | Rename db/ folder |
+| Adapters | ⚠️ PARTIAL | Move to adapters/ folder |
+| Types | ✅ EXISTS | Complete |
+| Utils | ✅ EXISTS | Complete |
+| Middleware | ✅ EXISTS | Complete |
+
+---
+
+## Layer Responsibilities (Architecture Principles)
+
+**Controllers (Presentation Layer)** - *NOT YET EXTRACTED*
 - Handle HTTP requests/responses
 - Validate request structure
 - Delegate to services
 - Return appropriate HTTP responses
 - **Never:** Business logic, direct DB access
 
-**Services (Business Logic Layer)**
+**Services (Business Logic Layer)** - *NOT YET EXTRACTED*
 - Implement business rules
 - Orchestrate workflows
 - Call repositories for data
 - Transform data between layers
 - **Never:** HTTP concerns, direct SQL
 
-**Repositories (Data Access Layer)**
+**Repositories (Data Access Layer)** - *EXISTS AS db/*
 - Execute database queries
 - Map rows to domain types
 - Handle data persistence
 - **Never:** Business logic, HTTP concerns
+
+**Adapters (External Integration Layer)** - *EXISTS AT ROOT LEVEL*
+- Format conversion (domain ↔ external API)
+- External service clients
+- Error mapping
+- **Never:** Business logic, database access
 
 **Adapters (Integration Layer)**
 - Wrap external APIs (AWS, Anthropic, OpenAI)

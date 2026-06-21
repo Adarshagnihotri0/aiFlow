@@ -57,22 +57,32 @@ $ npm run lint
 
 ## Verified Facts vs Confidence Assessments
 
-### Verified Facts (Not Confidence-Based)
-Report deterministic results separately:
+### Verified Facts (Deterministic - No Confidence)
+Report pass/fail results without confidence ratings:
 
 ```markdown
 ## Validation Evidence
 
-**TypeScript:** PASS (0 errors)
-- Command: `npm run typecheck`
-- Exit code: 0
+**TypeScript:** PASS
+```bash
+$ npm run typecheck
+> tsc --noEmit
+[success - no output]
+```
 
 **Tests:** PASS (9/9)
-- Test runner output attached
+```bash
+$ npm test
+✓ 9/9 tests passing
+```
 
 **ESLint:** 0 errors, 23 warnings
-- Command output: `✖ 23 problems (0 errors, 23 warnings)`
+```bash
+$ npm run lint
+✖ 23 problems (0 errors, 23 warnings)
 ```
+
+These are **verified facts**. Do NOT add confidence levels.
 
 ### Confidence Assessments (For Uncertain Claims)
 Use ★★★★★ for architectural judgments:
