@@ -317,6 +317,6 @@ await aiRuntime.sendTrace(t.complete());
 ## Further Reading
 
 - `docs/architecture/TRACEBUILDER_DESIGN.md` - TraceBuilder architecture decision
-- `docs/SDK_IMPLEMENTATION.md` - SDK implementation details
+- `docs/architecture/SDK_IMPLEMENTATION.md` - SDK implementation details
 - `AI_CONTEXT.md` - Complete project documentation
-- `PROJECT_EVOLUTION.md` - Project history and phases
+- `docs/history/PROJECT_EVOLUTION.md` - Project history and phases

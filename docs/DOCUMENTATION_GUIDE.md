@@ -16,7 +16,7 @@ This project has been consolidated for clarity. Here's what each document contai
    - Example output
    - Architecture overview
 
-2. **PROJECT_EVOLUTION.md** - Complete history
+2. **docs/history/PROJECT_EVOLUTION.md** - Complete history
    - Full timeline from conception to completion
    - All phases with dates and times
    - Design decisions and lessons learned
@@ -100,17 +100,17 @@ The following files were consolidated into **PROJECT_EVOLUTION.md** with timesta
 
 1. Start with **README.md**
 2. Try `airuntime prep` from your project
-3. Check **PROJECT_EVOLUTION.md** to understand the journey
+3. Check **docs/history/PROJECT_EVOLUTION.md** to understand the journey
 
 ### For Developers
 
 1. **docs/QUICK_REFERENCE.md** for daily commands
 2. **docs/TECHNICAL_DETAILS.md** for implementation details
-3. **PROJECT_EVOLUTION.md** for design decisions
+3. **docs/history/PROJECT_EVOLUTION.md** for design decisions
 
 ### For Understanding the Evolution
 
-1. Read **PROJECT_EVOLUTION.md** from start to finish
+1. Read **docs/history/PROJECT_EVOLUTION.md** from start to finish
 2. See how the project evolved over time
 3. Understand why certain decisions were made
 
