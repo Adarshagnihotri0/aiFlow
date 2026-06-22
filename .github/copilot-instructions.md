@@ -516,6 +516,36 @@ The constitution is a constrained resource.
 
 **Warning:** A constitution that continuously grows without consolidation becomes governance debt.
 
+---
+
+## Metric-to-Goal Mutation Rule
+
+**Observations must not be promoted to targets without validation.**
+
+A count, ratio, or metric that appears after refactoring is an observation.
+
+It becomes a target only after:
+1. Demonstrating that it predicts improved outcomes
+2. Validating through multiple independent iterations
+
+**Anti-pattern:** Labeling a snapshot as "Health Indicator" without evidence.
+
+**Example:**
+```
+❌ BAD:
+Post-consolidation count: 8 principles, 15 examples
+Derived ratio: 1:2
+Label: "Health Indicator"
+Result: Implicit optimization target created
+
+✅ GOOD:
+Post-consolidation count: 8 principles, 15 examples
+Label: "Informational only. Not optimization targets."
+Result: No false authority
+```
+
+**Prevents:** Goodhart's Law from corrupting governance artifacts.
+
 **This rule governs governance itself - highest leverage.**
 
 ---
@@ -526,9 +556,12 @@ The constitution is a constrained resource.
 
 ## Constitution Metrics
 
-**Principles:** 8  
-**Examples:** 15  
-**Playbooks:** 3  
+**Current Counts:**
+- Principles: 8
+- Examples: 15
+- Playbooks: 3
+
+**Status:** Informational only. Not optimization targets.
 
 **Rule Validation Status:**
 - ✅ Architecture Reasoning (OIR): Validated (unifies 4+ procedural rules)
@@ -537,6 +570,4 @@ The constitution is a constrained resource.
 - ✅ Governance ROI Rule: Validated (measured TraceService ROI)
 - ✅ Constitution Size Budget: Validated (consolidation complete)
 
-**Health Indicator:** 8 principles:15 examples (1:2 ratio)
-
-**Warning Indicator:** Principles growing faster than examples OR rules created without validation
+**Warning Indicator:** Rules created without validation or real-world application
