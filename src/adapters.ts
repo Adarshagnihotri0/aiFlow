@@ -24,7 +24,10 @@ function toConverseContent(content: unknown) {
         return text ? { text } : null;  // ← Return null for empty text
       }
       if (block['type'] === 'tool_use') {
-        return { toolUse: { toolUseId: block['id'], name: block['name'], input: block['input'] ?? {} } };
+        // AWS Bedrock: tool names must be ≤64 chars and match [a-zA-Z0-9_-]+
+        const toolName = String(block['name'] ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const truncatedName = toolName.length > 64 ? toolName.substring(0, 64) : toolName;
+        return { toolUse: { toolUseId: block['id'], name: truncatedName, input: block['input'] ?? {} } };
       }
       if (block['type'] === 'tool_result') {
         const raw = block['content'];
@@ -66,13 +69,18 @@ export function toConverseInput(body: Record<string, unknown>): Record<string, u
   const tools = body['tools'] as Record<string, unknown>[] | undefined;
   const toolConfig = tools?.length
     ? {
-        tools: tools.map((t) => ({
-          toolSpec: {
-            name: t['name'],
-            description: t['description'],
-            inputSchema: { json: t['input_schema'] },
-          },
-        })),
+        tools: tools.map((t) => {
+          // AWS Bedrock: tool names must be ≤64 chars and match [a-zA-Z0-9_-]+
+          const toolName = String(t['name'] ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const truncatedName = toolName.length > 64 ? toolName.substring(0, 64) : toolName;
+          return {
+            toolSpec: {
+              name: truncatedName,
+              description: t['description'],
+              inputSchema: { json: t['input_schema'] },
+            },
+          };
+        }),
       }
     : undefined;
 
@@ -173,7 +181,10 @@ export function openaiToConverseInput(body: Record<string, unknown>): Record<str
           const fn = tc['function'] as Record<string, unknown>;
           let input: unknown = {};
           try { input = JSON.parse(String(fn['arguments'] ?? '{}')); } catch { /* keep {} */ }
-          content.push({ toolUse: { toolUseId: tc['id'], name: fn['name'], input } });
+          // AWS Bedrock: tool names must be ≤64 chars and match [a-zA-Z0-9_-]+
+          const toolName = String(fn['name'] ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const truncatedName = toolName.length > 64 ? toolName.substring(0, 64) : toolName;
+          content.push({ toolUse: { toolUseId: tc['id'], name: truncatedName, input } });
         }
         return { role, content: content.length ? content : [{ text: '' }] };  // ← Fallback
       }
@@ -196,9 +207,12 @@ export function openaiToConverseInput(body: Record<string, unknown>): Record<str
     ? {
         tools: tools.map((t) => {
           const fn = t['function'] as Record<string, unknown>;
+          // AWS Bedrock: tool names must be ≤64 chars and match [a-zA-Z0-9_-]+
+          const toolName = String(fn['name'] ?? '').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const truncatedName = toolName.length > 64 ? toolName.substring(0, 64) : toolName;
           return {
             toolSpec: {
-              name: fn['name'],
+              name: truncatedName,
               description: fn['description'],
               inputSchema: { json: fn['parameters'] },
             },
