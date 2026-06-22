@@ -199,6 +199,59 @@ These follow: **Observe → Change → Verify → Done**
 
 ---
 
+## Debugging Rule
+
+**When investigating runtime failures, prioritize obtaining evidence (stack trace → failing line → state) before generating explanations.**
+
+### Evidence Value Hierarchy
+
+```
+P0: Stack trace       (★★★★★) - Shows exact failing line
+P1: Failing line      (★★★★☆) - Narrows scope to single location
+P2: Variable state    (★★★☆☆) - Shows what data looked like
+P3: Call path        (★★☆☆☆) - Shows how you got there
+P4: Root cause theory (★☆☆☆☆) - Explanation (LAST)
+```
+
+### Track Separation
+
+**Building Track (Architecture):**
+- Use OIR for design decisions
+- Apply Decision Cost Filter (C0-C4)
+- Multiple valid approaches possible
+
+**Debugging Track (Runtime):**
+- Use Evidence Ladder for failures
+- No OIR - single root cause exists
+- Fact-finding, not tradeoff analysis
+
+### Debugging Protocol
+
+**Phase 1: Document Evidence Gaps**
+```markdown
+Observation: [What happened]
+Missing Evidence: [P0, P1, P2...]
+Status: Root cause UNKNOWN
+Next Action: [Get highest-priority evidence]
+```
+
+**Phase 2: After Stack Trace (P0)**
+```markdown
+Failing Line: [file:line]
+Root Cause: [Direct observation]
+Fix: [Minimal change]
+```
+
+### Rules
+
+- **Status = UNKNOWN until P0 obtained**
+- **Maximum 2 hypotheses before P0-P2**
+- **Hypotheses are not evidence**
+- **Stop analysis when evidence gap identified**
+- **Root cause not confirmed until failing execution path AND failing condition directly observed**
+
+---
+
 ### OIR Structure
 
 All architecture recommendations must show:
