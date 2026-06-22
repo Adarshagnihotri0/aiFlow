@@ -235,26 +235,6 @@ This repo **violates its own Governance ROI Rule**:
 | **No CI/CD pipeline** | High | GitHub Actions needed for `npm run validate` |
 | **Unvalidated usefulness** | High | No external user feedback collected |
 
-### CI/CD Pipeline (Pending)
-
-```yaml
-# .github/workflows/validate.yml - NOT YET CREATED
-name: Validate
-on: [push, pull_request]
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm ci
-      - run: npm run validate
-```
-
-**Estimated Time:** 10 minutes to implement
-**Priority:** High (addressed review score of 7.5/10)
 
 ---
 
