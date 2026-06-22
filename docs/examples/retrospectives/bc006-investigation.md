@@ -7,6 +7,59 @@
 
 ---
 
+## The Architecture Reasoning Failure
+
+This investigation demonstrates why **Observation → Interpretation → Recommendation** matters.
+
+### The Failed Reasoning Chain
+
+```
+Observation:
+  server.ts imports db/ modules
+
+    ↓ (WEAK)
+
+Interpretation:
+  "Message routes are the hotspot for violations"
+  
+  Status: UNSUPPORTED ❌
+  
+  Assumption: Message routes contain db imports
+  
+  Result: DISPROVEN
+
+    ↓
+
+Recommendation:
+  Extract MessageService
+```
+
+### The Correct Reasoning Chain
+
+```
+Observation:
+  Line 208: import('./db/save-trace-async')
+  Line 458: import('./db/client')
+
+    ↓ (VERIFIED)
+
+Interpretation:
+  Trace routes skip the service layer
+  
+  Evidence: Route audit mapped handlers → imports
+  
+  Status: SUPPORTED ✅
+
+    ↓
+
+Recommendation:
+  Extract TraceService
+```
+
+**Key Insight:** The interpretation was the exact failure point.
+
+---
+
 ## The Boundary Rule
 
 ### BC-006: Skip-Layer Import Forbidden

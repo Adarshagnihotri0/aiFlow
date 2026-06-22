@@ -146,15 +146,31 @@ const a = users.filter(u => u.a);  // Unclear what 'a' means
 
 ---
 
+## Architecture Reasoning
+
+All architecture recommendations must show:
+
+**Observations** — What was directly observed?  
+**Interpretations** — What do the observations mean?  
+**Recommendations** — What action follows?
+
+High-impact assumptions must be explicit.
+
+Recommendations based on unverified assumptions are blocked.
+
+**The key question:** Show me the interpretation that connects the observation to the recommendation.
+
+---
+
 ## Architecture Evidence Rule
 
 **Before proposing a new abstraction, provide:**
 
-1. **Exact file(s)** - Where is the problem?
-2. **Exact line(s)** - What specific code?
-3. **Exact violation(s)** - What boundary crossed?
-4. **Measured frequency** - How many occurrences?
-5. **Expected improvement** - What will change?
+1. **Exact file(s)** — Where is the problem? (Observation)
+2. **Exact line(s)** — What specific code? (Observation)
+3. **Exact violation(s)** — What boundary crossed? (Interpretation)
+4. **Measured frequency** — How many occurrences? (Observation)
+5. **Expected improvement** — What will change? (Recommendation)
 
 **If any evidence is missing:**
 ```
@@ -275,125 +291,19 @@ Ratio: 3 : 1
 
 ---
 
-## Highest-Leverage First Rule
-
-When multiple architectural issues exist:
-
-1. **Measure all violations** - Count actual problems, not theoretical ones
-2. **Rank by impact** - Which violations affect most code paths
-3. **Refactor highest-impact violation first** - Maximum architectural improvement per effort
-
-**Do not create new layers unless they address a measured architectural problem.**
-
-Example calculation:
-```
-BC-006 violations in trace routes = 2 (affects 2 endpoints, db skip)
-BC-006 violations in message routes = 0 (no db imports)
-
-Result:
-Refactor trace routes first.
-Message routes already clean.
-```
-
-This prevents optimizing non-problems while real violations persist.
-
----
-
-## Problem-First Refactoring
-
-Before creating a new abstraction:
-
-1. **Locate the exact violation** - Find specific file/line/import
-2. **Measure its frequency** - Count affected endpoints/files
-3. **Identify affected files** - List all files with the problem
-4. **Verify root cause** - Confirm the architectural boundary being crossed
-5. **Then design abstraction** - Only after 1-4 complete
-
-**Never create a service because architecture suggests one.**
-
-**Create a service because a measured problem requires one.**
-
-Example:
-```
-❌ BAD:
-Assumption: "Message routes violate BC-006"
-Action: Create MessageService
-Result: 0 violations resolved
-
-✅ GOOD:
-Audit: Map Route → Imports for all handlers
-Find: db imports in trace routes only
-Action: Create TraceService
-Result: 2 violations resolved
-```
-
----
-
-## Baseline Before Refactor
-
-Every architectural change must record:
-
-- **Current LOC** - Lines of code in affected files
-- **Current violations** - Count and location of boundary violations
-- **Current dependency graph** - Import structure before changes
-- **Current test status** - All tests passing/failing
-
-Refactors are measured against a baseline.
-
-**No refactor begins without a baseline.**
-
-Example baseline:
-```
-File: src/server.ts (493 LOC)
-Violations: 2 (lines 208, 458)
-Imports: saveTraceAsync, getPool (skip-layer)
-Tests: 9/9 passing
-```
-
----
-
 ## Repository Reality Over Planned Architecture
 
-When architecture documentation conflicts with implementation:
+**Current code is the source of truth.**
 
-**Implementation is the source of truth.**
+Architecture documents, ADRs, and planned designs are interpretations.
 
-Required sequence:
-1. Audit implementation
-2. Measure reality
-3. Compare against architecture
-4. Refactor code OR update architecture
+Observations must come from the current codebase, not planned architecture.
 
-**Never create abstractions solely because architecture documents suggest they should exist.**
+When documentation conflicts with implementation: audit, measure, refactor code OR update documentation.
 
-Example:
-```
-ADR-002 says: Services layer exists
-Reality: No services layer implemented
-
-❌ BAD:
-Assume: Services needed
-Create: MessageService
-Result: Wrong abstraction
-
-✅ GOOD:
-Audit: No services exist
-Measure: Which routes violate boundaries?
-Find: Trace routes have violations
-Create: TraceService
-Result: Correct abstraction
-```
+**See:** `docs/examples/playbooks/refactor-workflow.md` for procedural checklist.
 
 ---
-
-## Refactor Success Criteria
-
-A refactor is complete only if:
-
-- ✅ **Complexity decreases** - Fewer lines or simpler structure
-- ✅ **Violations decrease** - Boundary violations reduced
-- ✅ **Tests pass** - All tests still passing
-- ✅ **Build passes** - TypeScript compilation successful
 
 **Creating new files alone is not a successful refactor.**
 
@@ -501,36 +411,6 @@ A task is **NOT done** until:
 
 ---
 
-## Refactor Success Criteria
-
-A refactor is complete only if:
-
-- ✅ **Complexity decreases** - Fewer lines or simpler structure
-- ✅ **Violations decrease** - Boundary violations reduced
-- ✅ **Tests pass** - All tests still passing
-- ✅ **Build passes** - TypeScript compilation successful
-- ✅ **Lint passes** - 0 errors
-
-**Creating new files alone is not a successful refactor.**
-
-Example:
-```
-❌ MessageService extraction:
-  - New file created ✅
-  - Violations unchanged ❌ (0 → 0)
-  - Not integrated ⚠️
-  
-  Result: INCOMPLETE
-
-✅ TraceService extraction:
-  - New file created ✅
-  - Violations reduced ✅ (2 → 0)
-  - Integrated ✅
-  - Tests pass ✅
-  
-  Result: COMPLETE
-```
-
 ---
 
 ## How to Structure Work
@@ -547,83 +427,9 @@ List in **dependency order** before implementing.
 
 ---
 
-## Context Engineering Rules
+## Agent Behavior
 
-1. **Search before inventing** - Find and mirror existing patterns
-2. **Reference exact paths** - No "the auth file" vagueness
-3. **Check package.json** - Verify library versions before API suggestions
-4. **Small diffs preferred** - Reviewable changes over large rewrites
-5. **Flag assumptions** - Don't guess silently when context is missing
-
----
-
-## Agent Execution Principles
-
-### Evidence Over Claims
-Report **verified results**, not assumptions. Attach **command output**, not summaries.
-
-```typescript
-// BAD
-Tests pass.
-
-// GOOD
-$ npm test
-✓ 9/9 tests passing
-```
-
-### Confidence Over Certainty
-State **confidence level** when evidence incomplete. Never present assumptions as verified facts.
-
-```
-Claim: No stale imports
-Confidence: ★★★★☆ (High)
-Evidence: grep search returned 0 results
-```
-
-### Root Cause Over Symptoms
-Explain **WHY** issues existed. Document prevention. Track resolution method.
-
-```
-Issue: 145 lint errors
-Root Cause: Code predated enforcement, no CI validation
-Prevention: Install enforcement first, add pre-commit hooks
-```
-
-### Risk Awareness Required
-Every change introduces risk. Document tradeoffs. Include "What could go wrong."
-
-```
-Change: ESLint override for server.ts
-Benefits: 117 errors resolved
-Risks: Future unsafe code won't be caught
-Mitigation: Manual code review + tests compensate
-```
-
-### Pattern Consistency First
-Before introducing a new pattern:
-
-1. Search the repository
-2. Identify existing approaches
-3. Reuse or mirror existing pattern when appropriate
-4. Justify deviations
-5. Document rejected alternatives
-
-```
-Pattern: Factory function
-Found: src/trace/create-trace.ts (similar)
-Choice: Mirror existing factory pattern
-Alternatives rejected:
-  - Class: No stateful lifecycle needed
-  - Builder: Simple creation, no complex assembly
-```
-
-### Verification Is Separate From Implementation
-Code changes are not complete until validated. Report independently.
-
-```
-Status: IMPLEMENTED ✅
-Status: VERIFIED ❌ (pending test run)
-```
+Agent execution principles have moved to `.github/agents/default.agent.md`.
 
 ---
 
@@ -720,19 +526,17 @@ The constitution is a constrained resource.
 
 ## Constitution Metrics
 
-**Current Size:** ~600 lines
-
-**Growth Rate:**
-- Constitution: ~1 rule per 2-3 refactors
-- Examples: ~1-2 per refactor
+**Principles:** 8  
+**Examples:** 15  
+**Playbooks:** 3  
 
 **Rule Validation Status:**
+- ✅ Architecture Reasoning (OIR): Validated (unifies 4+ procedural rules)
 - ✅ Architecture Evidence Rule: Validated (prevented MessageService mistake)
 - ✅ Rule Creation Filter: Validated (demoted Documentation Usage Rule)
 - ✅ Governance ROI Rule: Validated (measured TraceService ROI)
-- ⚠️ Constitution Size Budget: Testing (recently added)
-- 🧪 Documentation Usage: Hypothesis (moved to examples)
+- ✅ Constitution Size Budget: Validated (consolidation complete)
 
-**Health Indicator:** Examples growing faster than constitution + rules validated through iterations
+**Health Indicator:** 8 principles:15 examples (1:2 ratio)
 
-**Warning Indicator:** Constitution growing faster than examples OR rules created without validation
+**Warning Indicator:** Principles growing faster than examples OR rules created without validation
