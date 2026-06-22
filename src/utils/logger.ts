@@ -26,8 +26,11 @@ const baseLogger = winston.createLogger({
       format: winston.format.combine(
         winston.format.colorize(),
         winston.format.printf(({ level, message, timestamp, trace_id, ...meta }) => {
-          const tracePrefix = trace_id ? `[${trace_id}] ` : '';
-          return `${timestamp} ${level}: ${tracePrefix}${message} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
+          const tracePrefix = trace_id && typeof trace_id === 'string' ? `[${trace_id}] ` : '';
+          const ts = typeof timestamp === 'string' ? timestamp : String(timestamp);
+          const lvl = typeof level === 'string' ? level : String(level);
+          const msg = typeof message === 'string' ? message : String(message);
+          return `${ts} ${lvl}: ${tracePrefix}${msg} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
         })
       )
     })
@@ -48,7 +51,7 @@ export interface Logger {
  * Create a context-aware logger that automatically injects trace_id
  */
 export function createContextLogger(context: ExecutionContext): Logger {
-  const log = (level: string, message: string, meta: Record<string, unknown> = {}) => {
+  const log = (level: string, message: string, meta: Record<string, unknown> = {}): void => {
     baseLogger.log(level, message, {
       trace_id: context.trace_id,
       route: context.route,

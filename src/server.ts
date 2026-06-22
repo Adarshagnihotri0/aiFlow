@@ -3,9 +3,15 @@ import { invokeModel, invokeModelStream, invokeModelOpenAI, invokeModelStreamOpe
 import { AVAILABLE_MODELS, STATIC_MODEL_ID } from './adapters';
 import { contextMiddleware } from './middleware/context';
 import { createContextLogger } from './utils/logger';
+import { createTraceService } from './services/trace-service';
+import { saveTraceAsync } from './db/save-trace-async';
+import { getPool } from './db/client';
 import './types/context'; // Import to augment Express namespace
 
 const app = express();
+
+// Initialize trace service with dependency injection
+const traceService = createTraceService({ saveTraceAsync, getPool });
 app.use(express.json({ limit: '10mb' }));
 app.use(contextMiddleware);
 
@@ -71,7 +77,7 @@ app.post('/v1/completions', async (req, res) => {
     trace?.start('prompt_build');
     const body = req.body as Record<string, unknown>;
     const prompt = typeof body['prompt'] === 'string' ? body['prompt'] : '';
-    const chatBody = { ...body, messages: [{ role: 'user', content: prompt }] } as any;
+    const chatBody = { ...body, messages: [{ role: 'user', content: prompt }] } as Record<string, unknown>;
     trace?.end('prompt_build');
     
     const isStream = chatBody['stream'] === true;
@@ -136,7 +142,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 // ── Trace ingestion endpoint for SDK clients ─────────────────────────────────────
-app.post('/trace', async (req, res) => {
+app.post('/trace', (req, res) => {
   try {
     const tracePayload = req.body;
     
@@ -178,7 +184,7 @@ app.post('/trace', async (req, res) => {
 });
 
 // ── Versioned trace endpoint (canonical) ────────────────────────────────────────
-app.post('/api/v1/traces', async (req, res) => {
+app.post('/api/v1/traces', (req, res) => {
   try {
     const tracePayload = req.body;
     
@@ -206,27 +212,9 @@ app.post('/api/v1/traces', async (req, res) => {
       project_root: tracePayload.project_root
     });
 
-    // Persist trace to database with project_root
-    const { saveTraceAsync } = await import('./db/save-trace-async');
-    const traceRow: import('./types/trace').ExecutionTraceRow = {
-      trace_id: tracePayload.trace_id,
-      route: tracePayload.route,
-      routing_ms: tracePayload.stages?.find((s: any) => s.name === 'routing')?.duration_ms || null,
-      prompt_build_ms: tracePayload.stages?.find((s: any) => s.name === 'prompt_build')?.duration_ms || null,
-      adapter_ms: tracePayload.stages?.find((s: any) => s.name === 'adapter')?.duration_ms || null,
-      total_ms: tracePayload.total_ms,
-      status: tracePayload.status,
-      error_message: tracePayload.error_message || null,
-      project_root: tracePayload.project_root || null
-    };
-    saveTraceAsync(traceRow);
-    
-    res.json({ 
-      status: 'ok', 
-      trace_id: tracePayload.trace_id,
-      received_at: new Date().toISOString(),
-      api_version: 'v1'
-    });
+    // Use trace service for persistence
+    const result = traceService.ingestTrace(tracePayload);
+    res.json({ status: 'ok', ...result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Trace ingestion error (v1):', message);
@@ -244,19 +232,18 @@ app.get('/api/v1/context', async (req, res) => {
       return;
     }
 
-    const { existsSync, readFileSync } = await import('fs');
-    const { join, basename } = await import('path');
-    const { execSync } = await import('child_process');
+    const fs = await import('fs');
+    const path = await import('path');
+    const childProcess = await import('child_process');
     
     // 1. Derive project name (no config required)
-    let projectName = basename(root);
-    let packageJson: any = null;
+    let projectName = path.basename(root);
+    let packageJson: { name?: string; [key: string]: unknown } | null = null;
     
-    if (existsSync(join(root, 'package.json'))) {
+    if (fs.existsSync(path.join(root, 'package.json'))) {
       try {
-        packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
-        projectName = packageJson.name || projectName;
-        console.log('DEBUG: packageJson.main =', packageJson.main);
+        packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+        projectName = packageJson?.name || projectName;
       } catch (e) {
         // Ignore parse errors
       }
@@ -268,19 +255,19 @@ app.get('/api/v1/context', async (req, res) => {
     let gitRemote = '';
     
     try {
-      gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
-      gitStatus = execSync('git status --short', { cwd: root, encoding: 'utf-8' }).trim();
-      gitRemote = execSync('git remote get-url origin 2>/dev/null || echo ""', { cwd: root, encoding: 'utf-8' }).trim();
+      gitBranch = childProcess.execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf-8' }).trim();
+      gitStatus = childProcess.execSync('git status --short', { cwd: root, encoding: 'utf-8' }).trim();
+      gitRemote = childProcess.execSync('git remote get-url origin 2>/dev/null || echo ""', { cwd: root, encoding: 'utf-8' }).trim();
     } catch (e) {
       // Not a git repo or git not installed
     }
     
     // 3. Scan important files with metadata
-    const { readdirSync, statSync, readFileSync: readFile } = await import('fs');
+    const { readFileSync: readFile } = await import('fs');
     const importantFiles: Array<{ path: string; lines?: number; is_entry_point?: boolean }> = [];
     
     // Extract entry point from package.json
-    const entryPoint = packageJson?.main || null;
+    const entryPoint = (packageJson?.main as string | undefined) || undefined;
     
     const countLines = (filePath: string): number => {
       try {
@@ -295,8 +282,8 @@ app.get('/api/v1/context', async (req, res) => {
       // Files to always include
       const criticalFiles = ['package.json', 'README.md', 'tsconfig.json', 'docker-compose.yml', 'Dockerfile'];
       criticalFiles.forEach(file => {
-        const fullPath = join(root, file);
-        if (existsSync(fullPath)) {
+        const fullPath = path.join(root, file);
+        if (fs.existsSync(fullPath)) {
           const lines = countLines(fullPath);
           importantFiles.push({ path: file, lines });
         }
@@ -304,14 +291,14 @@ app.get('/api/v1/context', async (req, res) => {
       
       // Scan root directory for JS/TS files (including entry point)
       try {
-        const rootFiles = readdirSync(root);
+        const rootFiles = fs.readdirSync(root);
         rootFiles.forEach(file => {
           if (/\.(js|ts|jsx|tsx)$/.test(file)) {
-            const fullPath = join(root, file);
-            const stat = statSync(fullPath);
+            const fullPath = path.join(root, file);
+            const stat = fs.statSync(fullPath);
             if (stat.isFile()) {
               const lines = countLines(fullPath);
-              const isEntryPoint = entryPoint && entryPoint === file;
+              const isEntryPoint = Boolean(entryPoint && entryPoint === file);
               importantFiles.push({ 
                 path: file, 
                 lines,
@@ -320,7 +307,9 @@ app.get('/api/v1/context', async (req, res) => {
             }
           }
         });
-      } catch (e) {}
+      } catch (e) {
+        // Ignore git/traverse errors - not critical
+      }
       
       // Mark entry point if found in package.json (already added above)
       if (entryPoint) {
@@ -332,16 +321,16 @@ app.get('/api/v1/context', async (req, res) => {
       }
       
       // Scan src/ directory if exists
-      const srcDir = join(root, 'src');
-      if (existsSync(srcDir)) {
-        const scanDir = (dir: string, prefix: string = '') => {
+      const srcDir = path.join(root, 'src');
+      if (fs.existsSync(srcDir)) {
+        const scanDir = (dir: string, prefix: string = ''): void => {
           try {
-            const entries = readdirSync(dir);
+            const entries = fs.readdirSync(dir);
             entries.forEach(entry => {
               if (entry.startsWith('.') || entry === 'node_modules') return;
               
-              const fullPath = join(dir, entry);
-              const stat = statSync(fullPath);
+              const fullPath = path.join(dir, entry);
+              const stat = fs.statSync(fullPath);
               const relativePath = prefix ? `${prefix}/${entry}` : entry;
               
               if (stat.isDirectory()) {
@@ -349,11 +338,11 @@ app.get('/api/v1/context', async (req, res) => {
               } else if (stat.isFile() && /\.(ts|js|jsx|tsx|py|go|rs)$/.test(entry)) {
                 const lines = countLines(fullPath);
                 const filePath = `src/${relativePath}`;
-                const isEntryPoint = entryPoint && (
+                const isEntryPoint = Boolean(entryPoint && (
                   entryPoint === filePath ||
                   entryPoint.replace(/^dist\//, 'src/') === filePath ||
                   entryPoint.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts') === filePath
-                );
+                ));
                 importantFiles.push({ 
                   path: filePath, 
                   lines,
@@ -361,7 +350,9 @@ app.get('/api/v1/context', async (req, res) => {
                 });
               }
             });
-          } catch (e) {}
+          } catch (e) {
+            // Ignore file stat errors - file may not exist or be inaccessible
+          }
         };
         scanDir(srcDir);
       }
@@ -369,14 +360,20 @@ app.get('/api/v1/context', async (req, res) => {
       console.warn('Could not scan files:', e);
     }
     
+    interface FileMetadata {
+  path: string;
+  lines?: number;
+  preview?: string;
+}
+
     // 4. Deep mode: Add file previews
     const deep = req.query.deep === 'true';
     if (deep && importantFiles.length > 0) {
       const fs = await import('fs');
-      importantFiles.forEach((file: any) => {
+      importantFiles.forEach((file: FileMetadata) => {
         if (file.path && file.lines && file.lines < 500) {  // Only preview files < 500 lines
           try {
-            const fullPath = join(root, file.path);
+            const fullPath = path.join(root, file.path);
             const content = fs.readFileSync(fullPath, 'utf-8');
             const previewLines = content.split('\n').slice(0, 20);
             file.preview = previewLines.join('\n');
@@ -391,9 +388,17 @@ app.get('/api/v1/context', async (req, res) => {
     const { getPool } = await import('./db/client');
     const pool = getPool();
     
-    let traces: any[] = [];
+    interface TraceRecord {
+  trace_id: string;
+  route: string;
+  total_ms: number;
+  status: string;
+  timestamp: Date;
+}
+
+    let traces: TraceRecord[] = [];
     try {
-      const result = await pool.query(`
+      const result = await pool.query<TraceRecord>(`
         SELECT trace_id, route, total_ms, status, created_at as timestamp
         FROM execution_traces
         WHERE project_root = $1
@@ -451,36 +456,14 @@ app.get('/api/v1/context', async (req, res) => {
 app.get('/api/v1/traces/:id', async (req, res) => {
   try {
     const traceId = req.params.id;
+    const result = await traceService.getTrace(traceId);
     
-    const { getPool } = await import('./db/client');
-    const pool = getPool();
-    
-    const result = await pool.query(
-      'SELECT * FROM execution_traces WHERE trace_id = $1',
-      [traceId]
-    );
-    
-    if (result.rows.length === 0) {
-      res.status(404).json({ error: 'Trace not found' });
+    if (!result.found) {
+      res.status(404).json({ error: result.error || 'Trace not found' });
       return;
     }
     
-    const trace = result.rows[0];
-    
-    // Format for readability
-    res.json({
-      trace_id: trace.trace_id,
-      route: trace.route,
-      timing: {
-        routing_ms: trace.routing_ms,
-        prompt_build_ms: trace.prompt_build_ms,
-        adapter_ms: trace.adapter_ms,
-        total_ms: trace.total_ms
-      },
-      status: trace.status,
-      error: trace.error_message || null,
-      timestamp: trace.created_at
-    });
+    res.json(result.trace);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('Trace fetch error:', message);

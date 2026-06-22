@@ -3,7 +3,7 @@
  */
 
 import express from 'express';
-import { trace, sendTrace } from 'mcp-trace-sdk';
+import { trace, sendTrace } from '@adarsh/ai-runtime';
 
 const app = express();
 
@@ -58,5 +58,5 @@ app.get('/api/users/:id', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Traces will be sent to: ${process.env.MCP_TRACE_ENDPOINT || 'http://localhost:3000/trace'}`);
+  console.log(`Traces will be sent to: ${process.env.AI_RUNTIME_ENDPOINT || 'http://localhost:3000/api/v1/traces'}`);
 });

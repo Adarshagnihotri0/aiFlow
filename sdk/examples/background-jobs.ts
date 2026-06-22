@@ -2,7 +2,7 @@
  * Integration Example - Background job processing with tracing
  */
 
-import { trace, sendTrace, autoTrace } from 'mcp-trace-sdk';
+import { trace, sendTrace, autoTrace } from '@adarsh/ai-runtime';
 
 // Job processor with manual tracing
 async function processJob(job: { id: string; type: string; data: any }) {
@@ -66,7 +66,7 @@ async function cleanupJob(jobId: string) {
 
 // Example usage
 console.log('Background Job Processor');
-console.log('Set MCP_TRACE_ENDPOINT to configure trace destination');
+console.log('Set AI_RUNTIME_ENDPOINT to configure trace destination');
 
 setInterval(async () => {
   const job = {
