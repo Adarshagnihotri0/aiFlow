@@ -39,11 +39,11 @@ export function getPool(): Pool {
     });
 
     pool.on('error', (err) => {
-      console.error('PostgreSQL pool error:', err);
+      console.error('PostgreSQL pool error:', err); // eslint-disable-line no-console
     });
 
     pool.on('connect', () => {
-      console.log('PostgreSQL connection established');
+      console.log('PostgreSQL connection established'); // eslint-disable-line no-console
     });
   }
 
@@ -57,6 +57,6 @@ export async function closePool(): Promise<void> {
   if (pool) {
     await pool.end();
     pool = null;
-    console.log('PostgreSQL pool closed');
+    console.log('PostgreSQL pool closed'); // eslint-disable-line no-console
   }
 }

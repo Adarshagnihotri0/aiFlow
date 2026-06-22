@@ -7,6 +7,7 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import type { Response } from 'express';
 import { toConverseInput, fromConverseResponse, STATIC_MODEL_ID, openaiToConverseInput, fromConverseResponseOpenAI } from './adapters';
+import { logger } from './utils/logger';
 
 function makeClient(): BedrockRuntimeClient {
   const region = process.env.AWS_REGION ?? 'us-east-1';
@@ -79,8 +80,9 @@ export async function invokeModelStream(
   for await (const event of (response.stream ?? [])) {
     // content_block_start
     if (event.contentBlockStart) {
-      const { contentBlockIndex: idx, start } = event.contentBlockStart;
-      started.add(idx!);
+      const { contentBlockIndex, start } = event.contentBlockStart;
+      const idx = contentBlockIndex ?? 0;
+      started.add(idx);
       if (start?.toolUse) {
         sseWrite(res, 'content_block_start', {
           type: 'content_block_start', index: idx,
@@ -96,9 +98,10 @@ export async function invokeModelStream(
 
     // content_block_delta
     if (event.contentBlockDelta) {
-      const { contentBlockIndex: idx, delta } = event.contentBlockDelta;
-      if (!started.has(idx!)) {
-        started.add(idx!);
+      const { contentBlockIndex, delta } = event.contentBlockDelta;
+      const idx = contentBlockIndex ?? 0;
+      if (!started.has(idx)) {
+        started.add(idx);
         sseWrite(res, 'content_block_start', {
           type: 'content_block_start', index: idx,
           content_block: { type: 'text', text: '' },
@@ -157,7 +160,7 @@ export async function invokeModelOpenAI(
 ): Promise<Record<string, unknown>> {
   const input = openaiToConverseInput(body) as unknown as ConverseCommandInput;
   const response = await client.send(new ConverseCommand(input));
-  console.log('Converse response:', JSON.stringify(response));
+  logger?.debug('Converse response', { response });
   return fromConverseResponseOpenAI(response as unknown as Record<string, unknown>);
 }
 

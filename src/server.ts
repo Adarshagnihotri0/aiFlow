@@ -77,7 +77,7 @@ app.post('/v1/completions', async (req, res) => {
     trace?.start('prompt_build');
     const body = req.body as Record<string, unknown>;
     const prompt = typeof body['prompt'] === 'string' ? body['prompt'] : '';
-    const chatBody = { ...body, messages: [{ role: 'user', content: prompt }] } as any;
+    const chatBody = { ...body, messages: [{ role: 'user', content: prompt }] } as Record<string, unknown>;
     trace?.end('prompt_build');
     
     const isStream = chatBody['stream'] === true;
@@ -238,12 +238,12 @@ app.get('/api/v1/context', async (req, res) => {
     
     // 1. Derive project name (no config required)
     let projectName = path.basename(root);
-    let packageJson: any = null;
+    let packageJson: { name?: string; [key: string]: unknown } | null = null;
     
     if (fs.existsSync(path.join(root, 'package.json'))) {
       try {
         packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
-        projectName = packageJson.name || projectName;
+        projectName = packageJson?.name || projectName;
       } catch (e) {
         // Ignore parse errors
       }
@@ -267,7 +267,7 @@ app.get('/api/v1/context', async (req, res) => {
     const importantFiles: Array<{ path: string; lines?: number; is_entry_point?: boolean }> = [];
     
     // Extract entry point from package.json
-    const entryPoint = packageJson?.main || null;
+    const entryPoint = (packageJson?.main as string | undefined) || undefined;
     
     const countLines = (filePath: string): number => {
       try {
@@ -298,7 +298,7 @@ app.get('/api/v1/context', async (req, res) => {
             const stat = fs.statSync(fullPath);
             if (stat.isFile()) {
               const lines = countLines(fullPath);
-              const isEntryPoint = entryPoint && entryPoint === file;
+              const isEntryPoint = Boolean(entryPoint && entryPoint === file);
               importantFiles.push({ 
                 path: file, 
                 lines,
@@ -323,7 +323,7 @@ app.get('/api/v1/context', async (req, res) => {
       // Scan src/ directory if exists
       const srcDir = path.join(root, 'src');
       if (fs.existsSync(srcDir)) {
-        const scanDir = (dir: string, prefix: string = '') => {
+        const scanDir = (dir: string, prefix: string = ''): void => {
           try {
             const entries = fs.readdirSync(dir);
             entries.forEach(entry => {
@@ -338,11 +338,11 @@ app.get('/api/v1/context', async (req, res) => {
               } else if (stat.isFile() && /\.(ts|js|jsx|tsx|py|go|rs)$/.test(entry)) {
                 const lines = countLines(fullPath);
                 const filePath = `src/${relativePath}`;
-                const isEntryPoint = entryPoint && (
+                const isEntryPoint = Boolean(entryPoint && (
                   entryPoint === filePath ||
                   entryPoint.replace(/^dist\//, 'src/') === filePath ||
                   entryPoint.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts') === filePath
-                );
+                ));
                 importantFiles.push({ 
                   path: filePath, 
                   lines,
@@ -360,11 +360,17 @@ app.get('/api/v1/context', async (req, res) => {
       console.warn('Could not scan files:', e);
     }
     
+    interface FileMetadata {
+  path: string;
+  lines?: number;
+  preview?: string;
+}
+
     // 4. Deep mode: Add file previews
     const deep = req.query.deep === 'true';
     if (deep && importantFiles.length > 0) {
       const fs = await import('fs');
-      importantFiles.forEach((file: any) => {
+      importantFiles.forEach((file: FileMetadata) => {
         if (file.path && file.lines && file.lines < 500) {  // Only preview files < 500 lines
           try {
             const fullPath = path.join(root, file.path);
@@ -382,9 +388,17 @@ app.get('/api/v1/context', async (req, res) => {
     const { getPool } = await import('./db/client');
     const pool = getPool();
     
-    let traces: any[] = [];
+    interface TraceRecord {
+  trace_id: string;
+  route: string;
+  total_ms: number;
+  status: string;
+  timestamp: Date;
+}
+
+    let traces: TraceRecord[] = [];
     try {
-      const result = await pool.query(`
+      const result = await pool.query<TraceRecord>(`
         SELECT trace_id, route, total_ms, status, created_at as timestamp
         FROM execution_traces
         WHERE project_root = $1

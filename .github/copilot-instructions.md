@@ -3,9 +3,10 @@
 These principles apply to ALL code in this repository and cannot be overridden.
 
 **Quick Navigation:**
-- New to this repo? **Read README first**, then this file.
-- See `docs/architecture/ARCHITECTURE_SCORECARD.md` for current metrics.
-- See `docs/examples/` for concrete patterns.
+- **EXECUTE FIRST:** Read `OPERATING_MODEL.md` for day-to-day decision flow
+- **REFERENCE:** This file for detailed rules and examples
+- `docs/architecture/ARCHITECTURE_SCORECARD.md` for current metrics
+- `docs/examples/` for concrete patterns
 
 ---
 
@@ -146,7 +147,59 @@ const a = users.filter(u => u.a);  // Unclear what 'a' means
 
 ---
 
-## Architecture Reasoning
+## Architecture Reasoning (OIR)
+
+### Decision Cost Filter (Pre-OIR Calibration)
+
+Before applying Architecture Reasoning (OIR), classify the decision:
+
+**C0 — Trivial**
+- Reversible, local, low risk
+- Examples: tsconfig flags, lint rules, formatting, dependency tweaks (non-breaking)
+- **Process:** Observe → Act → Verify (NO OIR)
+
+**C1 — Tactical**
+- Affects single module behavior
+- Examples: API adjustments, runtime config changes
+- **Process:** Light OIR (skip deep assumption modeling unless ambiguity exists)
+
+**C2 — Architectural**
+- Affects structure or boundaries
+- Examples: service extraction, layer changes
+- **Process:** Full OIR required
+
+**C3 — Systemic**
+- Cross-module or repo-wide impact
+- Examples: refactors, dependency inversion, shared model changes
+- **Process:** Strict OIR + explicit assumptions required
+
+**C4 — Irreversible**
+- Migration or external contract impact
+- Examples: DB schema, public API changes, infra changes
+- **Process:** Full OIR + validation plan + rollback strategy
+
+**OIR Activation Rule:**
+Only apply full Architecture Reasoning when:
+- Structure is being introduced or changed
+- Inference is required across files/modules
+- Failure cost is high or irreversible
+- Multiple valid designs exist
+
+**Explicit Anti-Pattern:**
+Do NOT apply full OIR to:
+- Config alignment (tsconfig, eslint, build tools)
+- Formatting or naming changes
+- Dependency version updates (unless breaking)
+- Warning fixes
+- Local refactors with clear outcome
+
+These follow: **Observe → Change → Verify → Done**
+
+**Core Principle:** Reasoning depth must match decision cost.
+
+---
+
+### OIR Structure
 
 All architecture recommendations must show:
 

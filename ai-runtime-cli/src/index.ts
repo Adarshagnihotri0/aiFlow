@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import { execSync } from 'child_process';
+import type { ContextResponse, FileMetadata, TraceRecord } from './types';
 
 const program = new Command();
 
@@ -42,12 +43,13 @@ program
       } else {
         console.log(formatMarkdown(context));
       }
-    } catch (error: any) {
-      if (error.code === 'ECONNREFUSED') {
+    } catch (error: unknown) {
+      if (error instanceof Error && 'code' in error && error.code === 'ECONNREFUSED') {
         console.error(chalk.red('Error: Cannot connect to AI Runtime server'));
         console.error(chalk.dim('Start it with: npm start (in mcp2.0 directory)'));
       } else {
-        console.error(chalk.red('Error:'), error.message);
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(chalk.red('Error:'), message);
       }
       process.exit(1);
     }
@@ -64,8 +66,9 @@ program
     try {
       const response = await axios.get(`${options.server}/api/v1/traces/${id}`);
       console.log(JSON.stringify(response.data, null, 2));
-    } catch (error: any) {
-      console.error(chalk.red('Error:'), error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(chalk.red('Error:'), message);
       process.exit(1);
     }
   });
@@ -113,7 +116,7 @@ program.parse();
 /**
  * Format context as Markdown for AI assistants
  */
-function formatMarkdown(ctx: any): string {
+function formatMarkdown(ctx: ContextResponse): string {
   let md = `# Project: ${ctx.project.name}\n\n`;
   
   // Git status
@@ -129,7 +132,7 @@ function formatMarkdown(ctx: any): string {
   // Important files
   if (ctx.important_files && ctx.important_files.length > 0) {
     md += `## Important Files (${ctx.important_files.length})\n`;
-    ctx.important_files.forEach((file: any) => {
+    ctx.important_files.forEach((file: FileMetadata) => {
       if (typeof file === 'string') {
         md += `- ${file}\n`;
       } else {
@@ -164,7 +167,7 @@ function formatMarkdown(ctx: any): string {
   // Recent traces
   if (ctx.traces.length > 0) {
     md += `## Recent Traces (${ctx.traces.length})\n`;
-    ctx.traces.forEach((t: any) => {
+    ctx.traces.forEach((t: TraceRecord) => {
       const status = t.status === 'error' ? '❌' : '✓';
       md += `- ${status} ${t.route}: ${t.total_ms}ms\n`;
     });
