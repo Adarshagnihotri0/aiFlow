@@ -9,4 +9,3 @@ dist
 
 # Keep persistent knowledge
 !.ai/decision-records/
-.DS_Store

@@ -1,41 +1,24 @@
 {
-  "name": "developer-context-generator",
+  "name": "bedrock-proxy",
   "version": "1.0.0",
-  "description": "A CLI that automatically generates AI-ready project context from any repository",
+  "description": "Anthropic-compatible proxy for AWS Bedrock — integrates with Claude Code",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && npm run build:sdk && npm run build:cli",
-    "build:sdk": "cd sdk && npm run build",
-    "build:cli": "cd ai-runtime-cli && npm run build",
+    "build": "tsc",
+    "build:notify": "npm run build && afplay /System/Library/Sounds/Hero.aiff || afplay /System/Library/Sounds/Basso.aiff",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext .ts",
-    "lint:fix": "eslint . --ext .ts --fix",
-    "format": "prettier --write \"**/*.ts\"",
-    "format:check": "prettier --check \"**/*.ts\"",
-    "test": "cd sdk && npm test",
-    "validate": "npm run typecheck && npm run lint && npm test",
-    "precommit": "npm run validate"
+    "dev:notify": "npm run dev && afplay /System/Library/Sounds/Glass.aiff"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.758.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "pg": "^8.22.0",
-    "uuid": "^14.0.1",
-    "winston": "^3.19.0"
+    "nodemon": "^3.1.14"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
-    "@types/pg": "^8.20.0",
-    "@types/uuid": "^10.0.0",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "eslint": "^8.57.1",
-    "nodemon": "^3.1.14",
-    "prettier": "^3.8.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   }

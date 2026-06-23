@@ -1,7 +1,6 @@
 ---
-description: "Implements planned tasks and runs tests as validation gates"
-tools: [edit, search, codebase, usages, runCommands, terminal]
-user-invocable: true
+description: Implements planned tasks and runs tests as validation gates
+tools: ['edit', 'search', 'codebase', 'usages', 'runCommands', 'terminal']
 ---
 You implement code changes for tasks that have already been planned (CREATE/UPDATE/ADD/REMOVE/REFACTOR/MIRROR).
 
