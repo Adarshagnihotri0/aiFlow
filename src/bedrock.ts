@@ -76,6 +76,7 @@ export async function invokeModelStream(
   let stopReason = 'end_turn';
   let outputTokens = 0;
   const started = new Set<number>();
+  const responseText: string[] = []; // Collect text chunks for Telegram
 
   for await (const event of (response.stream ?? [])) {
     // content_block_start
@@ -108,6 +109,7 @@ export async function invokeModelStream(
         });
       }
       if (delta?.text !== undefined) {
+        responseText.push(delta.text); // Collect for Telegram
         sseWrite(res, 'content_block_delta', {
           type: 'content_block_delta', index: idx,
           delta: { type: 'text_delta', text: delta.text },
@@ -148,6 +150,35 @@ export async function invokeModelStream(
   });
   sseWrite(res, 'message_stop', { type: 'message_stop' });
   res.end();
+
+  // Play completion sound and send phone notification with response content
+  try {
+    const { execSync } = require('child_process');
+    execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+    
+    // Send Telegram notification with actual response content (FREE)
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      const https = require('https');
+      const fullText = responseText.join('');
+      // Telegram limit is 4096 chars - leave room for header
+      const maxLen = 4000;
+      const textToSend = fullText.length > maxLen 
+        ? fullText.substring(0, maxLen) + '...\n[truncated]'
+        : fullText;
+      
+      const message = encodeURIComponent(`📱 Response:\n\n${textToSend}`);
+      const path = `/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`;
+      
+      https.request({
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: path,
+        method: 'GET'
+      }).end();
+    }
+  } catch (e) {
+    // Ignore sound/notification errors
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -199,6 +230,7 @@ export async function invokeModelStreamOpenAI(
   const response = await client.send(new ConverseStreamCommand(input));
   const toolCallAccum: Record<number, { id: string; name: string; args: string }> = {};
   let finishReason = 'stop';
+  const responseText: string[] = []; // Collect text chunks for Telegram
 
   for await (const event of (response.stream ?? [])) {
     if (event.contentBlockStart?.start?.toolUse) {
@@ -217,6 +249,7 @@ export async function invokeModelStreamOpenAI(
       const idx = event.contentBlockDelta.contentBlockIndex ?? 0;
       const delta = event.contentBlockDelta.delta;
       if (delta?.text !== undefined) {
+        responseText.push(delta.text); // Collect for Telegram
         chunk({ content: delta.text });
       } else {
         const raw = delta as unknown as Record<string, unknown>;
@@ -237,4 +270,32 @@ export async function invokeModelStreamOpenAI(
   chunk({}, finishReason);
   res.write('data: [DONE]\n\n');
   res.end();
+
+  // Play completion sound and send phone notification with response content
+  try {
+    const { execSync } = require('child_process');
+    execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+    
+    // Send Telegram notification with actual response content (FREE)
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      const https = require('https');
+      const fullText = responseText.join('');
+      const maxLen = 4000;
+      const textToSend = fullText.length > maxLen 
+        ? fullText.substring(0, maxLen) + '...\n[truncated]'
+        : fullText;
+      
+      const message = encodeURIComponent(`📱 Response:\n\n${textToSend}`);
+      const path = `/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`;
+      
+      https.request({
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: path,
+        method: 'GET'
+      }).end();
+    }
+  } catch (e) {
+    // Ignore sound/notification errors
+  }
 }
