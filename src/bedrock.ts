@@ -8,6 +8,7 @@ import {
 import type { Response } from 'express';
 import { toConverseInput, fromConverseResponse, STATIC_MODEL_ID, openaiToConverseInput, fromConverseResponseOpenAI } from './adapters';
 import { logger } from './utils/logger';
+import { cacheStreamResponse, clearStreamCache, generateRequestId } from './utils/redis-cache';
 
 function makeClient(): BedrockRuntimeClient {
   const region = process.env.AWS_REGION ?? 'us-east-1';
@@ -50,6 +51,9 @@ export async function invokeModelStream(
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
+  // Generate unique request ID for caching
+  const requestId = generateRequestId();
+  
   const response = await client.send(new ConverseStreamCommand(input as unknown as ConverseStreamCommandInput));
 
   // ── message_start ─────────────────────────────────────────────────────────
@@ -110,6 +114,10 @@ export async function invokeModelStream(
       }
       if (delta?.text !== undefined) {
         responseText.push(delta.text); // Collect for Telegram
+        
+        // Cache chunk to Redis
+        cacheStreamResponse(requestId, delta.text);
+        
         sseWrite(res, 'content_block_delta', {
           type: 'content_block_delta', index: idx,
           delta: { type: 'text_delta', text: delta.text },
@@ -151,6 +159,9 @@ export async function invokeModelStream(
   sseWrite(res, 'message_stop', { type: 'message_stop' });
   res.end();
 
+  // Clear Redis cache after streaming completes
+  await clearStreamCache(requestId);
+
   // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
     if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
@@ -164,12 +175,30 @@ export async function invokeModelStream(
       const message = encodeURIComponent(`📱 Response:\n\n${textToSend}`);
       const path = `/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`;
       
-      https.request({
+      const req = https.request({
         hostname: 'api.telegram.org',
         port: 443,
         path: path,
-        method: 'GET'
-      }).end();
+        method: 'GET',
+        timeout: 5000
+      }, (res: any) => {
+        // Consume response to avoid memory leaks
+        res.on('data', () => {});
+        res.on('error', (err: Error) => {
+          console.error('[Telegram Notify Error]', err.message);
+        });
+      });
+      
+      req.on('error', (err: Error) => {
+        console.error('[Telegram Notify Error]', err.message);
+      });
+      
+      req.on('timeout', () => {
+        req.destroy();
+        console.error('[Telegram Notify Error] Request timeout');
+      });
+      
+      req.end();
     }
   } catch (e) {
     // Ignore notification errors
@@ -203,6 +232,9 @@ export async function invokeModelStreamOpenAI(
 
   const chatId = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
+
+  // Generate unique request ID for caching
+  const requestId = generateRequestId();
 
   function chunk(delta: Record<string, unknown>, finishReason: string | null = null): void {
     const payload = {
@@ -245,6 +277,10 @@ export async function invokeModelStreamOpenAI(
       const delta = event.contentBlockDelta.delta;
       if (delta?.text !== undefined) {
         responseText.push(delta.text); // Collect for Telegram
+        
+        // Cache chunk to Redis
+        cacheStreamResponse(requestId, delta.text);
+        
         chunk({ content: delta.text });
       } else {
         const raw = delta as unknown as Record<string, unknown>;
@@ -266,6 +302,9 @@ export async function invokeModelStreamOpenAI(
   res.write('data: [DONE]\n\n');
   res.end();
 
+  // Clear Redis cache after streaming completes
+  await clearStreamCache(requestId);
+
   // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
     if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
@@ -279,12 +318,30 @@ export async function invokeModelStreamOpenAI(
       const message = encodeURIComponent(`📱 Response:\n\n${textToSend}`);
       const path = `/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`;
       
-      https.request({
+      const req = https.request({
         hostname: 'api.telegram.org',
         port: 443,
         path: path,
-        method: 'GET'
-      }).end();
+        method: 'GET',
+        timeout: 5000
+      }, (res: any) => {
+        // Consume response to avoid memory leaks
+        res.on('data', () => {});
+        res.on('error', (err: Error) => {
+          console.error('[Telegram Notify Error]', err.message);
+        });
+      });
+      
+      req.on('error', (err: Error) => {
+        console.error('[Telegram Notify Error]', err.message);
+      });
+      
+      req.on('timeout', () => {
+        req.destroy();
+        console.error('[Telegram Notify Error] Request timeout');
+      });
+      
+      req.end();
     }
   } catch (e) {
     // Ignore notification errors

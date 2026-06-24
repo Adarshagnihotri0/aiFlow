@@ -94,12 +94,30 @@ async function sendTelegramMessage(text: string): Promise<boolean> {
  */
 async function sendTypingAction(): Promise<void> {
   const path = `/bot${TOKEN}/sendChatAction?chat_id=${CHAT_ID}&action=typing`;
-  https.get({
+  const req = https.get({
     hostname: 'api.telegram.org',
     port: 443,
     path: path,
     method: 'GET',
-  }).end();
+    timeout: 5000
+  }, (res) => {
+    // Consume response to avoid memory leaks
+    res.on('data', () => {});
+    res.on('error', (err) => {
+      console.error('[Telegram Typing Action Error]', err.message);
+    });
+  });
+  
+  req.on('error', (err) => {
+    console.error('[Telegram Typing Action Error]', err.message);
+  });
+  
+  req.on('timeout', () => {
+    req.destroy();
+    console.error('[Telegram Typing Action Error] Request timeout');
+  });
+  
+  req.end();
 }
 
 /**
