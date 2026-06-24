@@ -135,16 +135,19 @@ async function processMessage(text: string): Promise<string> {
       temperature: 0.7,
     });
     
-    // Extract response text
-    const responseText = (response.choices?.[0]?.message?.content as string) || 'Sorry, I could not process that.';
+    // Extract response text with proper type assertion
+    const choices = response.choices as Array<{ message?: { content?: string } }>;
+    const responseText = (choices?.[0]?.message?.content) || 'Sorry, I could not process that.';
     
     // Add assistant response to history
     messageHistory.push({ role: 'assistant', content: responseText });
     
     return responseText;
   } catch (error) {
-    console.error('[Telegram] Bedrock error:', error);
-    return '❌ Sorry, there was an error processing your request. Please try again.';
+    console.error('Error calling Bedrock:', error);
+    return 'Sorry, an error occurred while processing your message.';
+  } finally {
+    isProcessing = false;
   }
 }
 

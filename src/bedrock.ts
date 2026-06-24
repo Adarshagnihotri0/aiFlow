@@ -151,16 +151,11 @@ export async function invokeModelStream(
   sseWrite(res, 'message_stop', { type: 'message_stop' });
   res.end();
 
-  // Play completion sound and send phone notification with response content
+  // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
-    const { execSync } = require('child_process');
-    execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
-    
-    // Send Telegram notification with actual response content (FREE)
     if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
       const https = require('https');
       const fullText = responseText.join('');
-      // Telegram limit is 4096 chars - leave room for header
       const maxLen = 4000;
       const textToSend = fullText.length > maxLen 
         ? fullText.substring(0, maxLen) + '...\n[truncated]'
@@ -177,7 +172,7 @@ export async function invokeModelStream(
       }).end();
     }
   } catch (e) {
-    // Ignore sound/notification errors
+    // Ignore notification errors
   }
 }
 
@@ -271,12 +266,8 @@ export async function invokeModelStreamOpenAI(
   res.write('data: [DONE]\n\n');
   res.end();
 
-  // Play completion sound and send phone notification with response content
+  // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
-    const { execSync } = require('child_process');
-    execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
-    
-    // Send Telegram notification with actual response content (FREE)
     if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
       const https = require('https');
       const fullText = responseText.join('');
@@ -296,6 +287,6 @@ export async function invokeModelStreamOpenAI(
       }).end();
     }
   } catch (e) {
-    // Ignore sound/notification errors
+    // Ignore notification errors
   }
 }
