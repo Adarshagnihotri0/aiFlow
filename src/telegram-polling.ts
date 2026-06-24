@@ -3,6 +3,7 @@ import { invokeModelOpenAI } from './bedrock';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_ENABLED = process.env.TELEGRAM_ENABLED !== 'false'; // Default: true, set to 'false' to disable
 
 let lastUpdateId = 0;
 let isProcessing = false;
@@ -11,6 +12,16 @@ let messageHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 // Rate-limit error logging
 let lastTelegramError = 0;
 const ERROR_LOG_INTERVAL = 60000; // Only log once per minute
+
+// Telegram disabled message (shown once)
+let telegramDisabledShown = false;
+
+function logTelegramDisabled(): void {
+  if (!telegramDisabledShown) {
+    console.log('ℹ️  Telegram notifications disabled via TELEGRAM_ENABLED=false');
+    telegramDisabledShown = true;
+  }
+}
 
 function logTelegramError(context: string, error: Error | string): void {
   const now = Date.now();
@@ -65,6 +76,12 @@ async function checkTelegramAvailability(): Promise<boolean> {
  * Fetch updates from Telegram API with retry logic
  */
 async function getUpdates(): Promise<any[]> {
+  // Skip if Telegram disabled
+  if (!TELEGRAM_ENABLED) {
+    logTelegramDisabled();
+    return [];
+  }
+  
   // Check if Telegram is available before making request
   const available = await checkTelegramAvailability();
   if (!available) {
@@ -122,6 +139,12 @@ async function getUpdates(): Promise<any[]> {
  * Send message to Telegram with retry logic
  */
 async function sendTelegramMessage(text: string, retries = 3): Promise<boolean> {
+  // Skip if Telegram disabled
+  if (!TELEGRAM_ENABLED) {
+    logTelegramDisabled();
+    return false;
+  }
+  
   // Check if Telegram is available before making request
   const available = await checkTelegramAvailability();
   if (!available) {
@@ -302,13 +325,32 @@ return 'Sorry, an error occurred while processing your message.';
  * Start Telegram polling loop
  */
 export async function startTelegramPolling(): Promise<void> {
+  // Check if Telegram is disabled via environment variable
+  if (!TELEGRAM_ENABLED) {
+    console.log('ℹ️  Telegram polling disabled via TELEGRAM_ENABLED=false');
+    console.log('    Beep sounds will still work for Claude Code responses');
+    console.log('');
+    return;
+  }
+  
   if (!TOKEN || !CHAT_ID) {
     console.log('⚠️  Telegram polling disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID required');
+    console.log('    Add these environment variables or set TELEGRAM_ENABLED=false to silence this message');
+    console.log('');
     return;
+  }
+  
+  // Check Telegram availability on startup
+  const available = await checkTelegramAvailability();
+  if (!available) {
+    console.log('⚠️  Telegram API unreachable - polling disabled until connectivity restored');
+    console.log('    Telegram notifications will not work until network connectivity is fixed');
+    console.log('    Set TELEGRAM_ENABLED=false to disable Telegram completely');
   }
   
   console.log('✓ Telegram polling started');
   console.log(`  Chat ID: ${CHAT_ID}`);
+  console.log(`  Status: ${available ? '✅ Connected' : '❌ Unreachable (will retry every 5 minutes)'}`);
   console.log('');
   console.log('  Commands:');
   console.log('    /clear - Clear conversation history');
