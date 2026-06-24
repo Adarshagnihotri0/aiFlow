@@ -2,6 +2,11 @@ import Redis from 'ioredis';
 
 let redis: Redis | null = null;
 
+// Buffer for batching Redis writes
+const writeBuffer: Map<string, { chunks: string[]; lastFlush: number }> = new Map();
+const FLUSH_INTERVAL = 2000; // Flush every 2 seconds
+const MAX_BUFFER_SIZE = 100; // Or flush after 100 chunks
+
 /**
  * Get Redis client instance (singleton)
  */
@@ -29,7 +34,40 @@ export function getRedisClient(): Redis | null {
 }
 
 /**
- * Store streaming response in Redis cache
+ * Flush buffer to Redis
+ */
+async function flushBuffer(requestId: string): Promise<void> {
+  const client = getRedisClient();
+  if (!client) return;
+
+  const buffer = writeBuffer.get(requestId);
+  if (!buffer || buffer.chunks.length === 0) return;
+
+  const prefix = process.env.REDIS_STREAM_PREFIX || 'mcp:stream:';
+  const key = `${prefix}${requestId}`;
+
+  try {
+    // Batch write all chunks
+    if (buffer.chunks.length > 0) {
+      await client.rpush(key, ...buffer.chunks);
+      
+      // Set TTL on first write
+      if (buffer.chunks.length === buffer.chunks.length) {
+        const ttl = parseInt(process.env.REDIS_CACHE_TTL || '3600', 10);
+        await client.expire(key, ttl);
+      }
+    }
+
+    // Clear buffer after successful flush
+    buffer.chunks = [];
+    buffer.lastFlush = Date.now();
+  } catch (error) {
+    console.error('Failed to flush buffer:', error);
+  }
+}
+
+/**
+ * Store streaming response in Redis cache (buffered)
  */
 export async function cacheStreamResponse(
   requestId: string,
@@ -39,25 +77,25 @@ export async function cacheStreamResponse(
   const client = getRedisClient();
   if (!client) return;
 
-  const prefix = process.env.REDIS_STREAM_PREFIX || 'mcp:stream:';
-  const key = `${prefix}${requestId}`;
+  // Initialize buffer if needed
+  if (!writeBuffer.has(requestId)) {
+    writeBuffer.set(requestId, { chunks: [], lastFlush: Date.now() });
+  }
 
-  try {
-    // Append chunk to list
-    await client.rpush(key, chunk);
-    
-    // Set TTL (1 hour default)
-    const ttl = parseInt(process.env.REDIS_CACHE_TTL || '3600', 10);
-    await client.expire(key, ttl);
+  const buffer = writeBuffer.get(requestId)!;
+  buffer.chunks.push(chunk);
 
-    // If final chunk, mark for deletion after TTL
-    if (isFinal) {
-      // Add marker for completion
-      await client.rpush(key, '__STREAM_COMPLETE__');
-      console.log(`✓ Stream cached: ${requestId} (marked complete)`);
-    }
-  } catch (error) {
-    console.error('Failed to cache stream response:', error);
+  // Flush conditions:
+  // 1. Buffer size exceeded
+  // 2. Time since last flush exceeded
+  // 3. Final chunk
+  const shouldFlush = 
+    buffer.chunks.length >= MAX_BUFFER_SIZE ||
+    Date.now() - buffer.lastFlush >= FLUSH_INTERVAL ||
+    isFinal;
+
+  if (shouldFlush) {
+    await flushBuffer(requestId);
   }
 }
 
@@ -86,6 +124,15 @@ export async function getCachedStream(requestId: string): Promise<string[]> {
 export async function clearStreamCache(requestId: string): Promise<void> {
   const client = getRedisClient();
   if (!client) return;
+
+  // Flush any remaining buffered chunks first
+  const buffer = writeBuffer.get(requestId);
+  if (buffer && buffer.chunks.length > 0) {
+    await flushBuffer(requestId);
+  }
+
+  // Remove buffer entry
+  writeBuffer.delete(requestId);
 
   const prefix = process.env.REDIS_STREAM_PREFIX || 'mcp:stream:';
   const key = `${prefix}${requestId}`;

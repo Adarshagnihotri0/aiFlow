@@ -53,8 +53,10 @@ export async function invokeModelStream(
 
   // Generate unique request ID for caching
   const requestId = generateRequestId();
+  const responseText: string[] = []; // Collect text chunks for Telegram
   
-  const response = await client.send(new ConverseStreamCommand(input as unknown as ConverseStreamCommandInput));
+  try {
+    const response = await client.send(new ConverseStreamCommand(input as unknown as ConverseStreamCommandInput));
 
   // ── message_start ─────────────────────────────────────────────────────────
   sseWrite(res, 'message_start', {
@@ -80,7 +82,6 @@ export async function invokeModelStream(
   let stopReason = 'end_turn';
   let outputTokens = 0;
   const started = new Set<number>();
-  const responseText: string[] = []; // Collect text chunks for Telegram
 
   for await (const event of (response.stream ?? [])) {
     // content_block_start
@@ -158,9 +159,13 @@ export async function invokeModelStream(
   });
   sseWrite(res, 'message_stop', { type: 'message_stop' });
   res.end();
-
-  // Clear Redis cache after streaming completes
-  await clearStreamCache(requestId);
+  } catch (error) {
+    console.error('[Stream Error]', error);
+    throw error;
+  } finally {
+    // Clear Redis cache on ALL exit paths (success, error, disconnect)
+    await clearStreamCache(requestId);
+  }
 
   // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
@@ -235,6 +240,7 @@ export async function invokeModelStreamOpenAI(
 
   // Generate unique request ID for caching
   const requestId = generateRequestId();
+  const responseText: string[] = []; // Collect text chunks for Telegram
 
   function chunk(delta: Record<string, unknown>, finishReason: string | null = null): void {
     const payload = {
@@ -254,10 +260,10 @@ export async function invokeModelStreamOpenAI(
     end_turn: 'stop', max_tokens: 'length', tool_use: 'tool_calls', stop_sequence: 'stop',
   };
 
-  const response = await client.send(new ConverseStreamCommand(input));
-  const toolCallAccum: Record<number, { id: string; name: string; args: string }> = {};
-  let finishReason = 'stop';
-  const responseText: string[] = []; // Collect text chunks for Telegram
+  try {
+    const response = await client.send(new ConverseStreamCommand(input));
+    const toolCallAccum: Record<number, { id: string; name: string; args: string }> = {};
+    let finishReason = 'stop';
 
   for await (const event of (response.stream ?? [])) {
     if (event.contentBlockStart?.start?.toolUse) {
@@ -301,9 +307,13 @@ export async function invokeModelStreamOpenAI(
   chunk({}, finishReason);
   res.write('data: [DONE]\n\n');
   res.end();
-
-  // Clear Redis cache after streaming completes
-  await clearStreamCache(requestId);
+  } catch (error) {
+    console.error('[Stream Error]', error);
+    throw error;
+  } finally {
+    // Clear Redis cache on ALL exit paths (success, error, disconnect)
+    await clearStreamCache(requestId);
+  }
 
   // Send Telegram notification with response content (no sound - handled elsewhere)
   try {
