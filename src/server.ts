@@ -25,11 +25,25 @@ app.post('/v1/messages', async (req, res) => {
 
     if (isStream) {
       console.log("streaming response...2");
-      await invokeModelStream(body, res);
+      const responseText = await invokeModelStream(body, res);
+      // Play completion sound after streaming completes
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     } else {
       console.log("streaming response...1");
       const result = await invokeModel(body);
       res.json(result);
+      // Play completion sound after non-streaming response
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -49,10 +63,24 @@ app.post('/v1/completions', async (req, res) => {
     console.log(`[${new Date().toISOString()}] legacy   ${isStream ? 'stream' : 'sync '} → ${STATIC_MODEL_ID}`);
 
     if (isStream) {
-      await invokeModelStreamOpenAI(chatBody, res);
+      const responseText = await invokeModelStreamOpenAI(chatBody, res);
+      // Play completion sound after streaming completes
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     } else {
       const result = await invokeModelOpenAI(chatBody);
       res.json(result);
+      // Play completion sound after non-streaming response
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -70,10 +98,24 @@ app.post('/v1/chat/completions', async (req, res) => {
     console.log(`[${new Date().toISOString()}] openai   ${isStream ? 'stream' : 'sync '} → ${STATIC_MODEL_ID}`);
 
     if (isStream) {
-      await invokeModelStreamOpenAI(body, res);
+      const responseText = await invokeModelStreamOpenAI(body, res);
+      // Play completion sound after streaming completes
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     } else {
       const result = await invokeModelOpenAI(body);
       res.json(result);
+      // Play completion sound after non-streaming response
+      try {
+        const { execSync } = require('child_process');
+        execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' });
+      } catch (e) {
+        // Ignore sound errors
+      }
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

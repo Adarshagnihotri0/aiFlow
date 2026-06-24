@@ -9,18 +9,19 @@ let isProcessing = false;
 let messageHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
 /**
- * Fetch updates from Telegram API
+ * Fetch updates from Telegram API with retry logic
  */
 async function getUpdates(): Promise<any[]> {
   return new Promise((resolve) => {
     const path = `/bot${TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
     
-    https.get({
+    const req = https.request({
       hostname: 'api.telegram.org',
       port: 443,
       path: path,
       method: 'GET',
       timeout: 35000,
+      agent: false, // Disable connection pooling
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
@@ -38,20 +39,27 @@ async function getUpdates(): Promise<any[]> {
           resolve([]);
         }
       });
-    }).on('error', (err) => {
+    });
+    
+    req.on('error', (err) => {
       console.error('[Telegram] Fetch error:', err.message);
       resolve([]);
-    }).on('timeout', () => {
+    });
+    
+    req.on('timeout', () => {
       console.error('[Telegram] Request timeout');
+      req.destroy();
       resolve([]);
     });
+    
+    req.end();
   });
 }
 
 /**
- * Send message to Telegram
+ * Send message to Telegram with retry logic
  */
-async function sendTelegramMessage(text: string): Promise<boolean> {
+async function sendTelegramMessage(text: string, retries = 3): Promise<boolean> {
   const maxLen = 4000;
   const textToSend = text.length > maxLen 
     ? text.substring(0, maxLen) + '...\n[truncated]'
@@ -60,33 +68,60 @@ async function sendTelegramMessage(text: string): Promise<boolean> {
   // Use parse_mode=Markdown for better formatting
   const path = `/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(textToSend)}&parse_mode=Markdown`;
   
-  return new Promise((resolve) => {
-    https.get({
-      hostname: 'api.telegram.org',
-      port: 443,
-      path: path,
-      method: 'GET',
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.ok) {
-            resolve(true);
-          } else {
-            console.error('[Telegram] Send failed:', json.description);
-            resolve(false);
-          }
-        } catch {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const success = await new Promise<boolean>((resolve) => {
+        const req = https.request({
+          hostname: 'api.telegram.org',
+          port: 443,
+          path: path,
+          method: 'GET',
+          timeout: 10000, // 10 second timeout
+          agent: false, // Disable connection pooling
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => data += chunk);
+          res.on('end', () => {
+            try {
+              const json = JSON.parse(data);
+              if (json.ok) {
+                resolve(true);
+              } else {
+                console.error(`[Telegram] Send failed:`, json.description);
+                resolve(false);
+              }
+            } catch {
+              resolve(false);
+            }
+          });
+        });
+        
+        req.on('error', (err) => {
+          console.error(`[Telegram] Send error (attempt ${attempt}/${retries}):`, err.message);
           resolve(false);
-        }
+        });
+        
+        req.on('timeout', () => {
+          console.error(`[Telegram] Send timeout (attempt ${attempt}/${retries})`);
+          req.destroy();
+          resolve(false);
+        });
+        
+        req.end();
       });
-    }).on('error', (err) => {
-      console.error('[Telegram] Send error:', err.message);
-      resolve(false);
-    });
-  });
+      
+      if (success) return true;
+      
+      // Wait before retry (exponential backoff)
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    } catch (error) {
+      console.error(`[Telegram] Error (attempt ${attempt}/${retries}):`, error);
+    }
+  }
+  
+  return false;
 }
 
 /**
