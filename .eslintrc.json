@@ -42,8 +42,6 @@
     "dist",
     "*.js",
     "*.d.ts",
-    "sdk/**",
-    "ai-runtime-cli/**",
     "cli/**"
   ],
   "overrides": [

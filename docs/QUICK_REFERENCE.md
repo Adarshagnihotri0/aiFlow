@@ -66,17 +66,11 @@ mcp1.0.0/
 │   ├── bedrock.ts         # Bedrock SDK client, streaming
 │   └── adapters.ts        # Protocol translation logic
 ├── docs/
-│   ├── README.md                    # Main documentation
 │   ├── ARCHITECTURE.md              # Architecture overview
 │   ├── TECHNICAL_DETAILS.md         # Complete technical spec
 │   ├── FLOW_DIAGRAM.md              # Request/response flows
 │   ├── QUICK_REFERENCE.md           # This file
-│   ├── agents/
-│   │   ├── prp-analyst.agent.md    # Planning agent
-│   │   └── prp-executor.agent.md   # Implementation agent
-│   └── prompts/
-│       ├── prp-story-create.prompt.md   # Story → Plan
-│       └── prp-story-execute.prompt.md  # Plan → Execute
+│   └── DUAL_PORT_SETUP.md           # Client configuration
 ├── package.json           # Dependencies
 ├── tsconfig.json          # TypeScript config
 └── .env                   # Environment variables

@@ -4,5 +4,3 @@ dist
 *.d.ts
 coverage
 .ai
-sdk/dist
-ai-runtime-cli/dist
