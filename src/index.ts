@@ -14,6 +14,14 @@ app.listen(PORT, () => {
   console.log('    export ANTHROPIC_API_KEY=dummy');
   console.log('    claude');
   console.log('');
+
+  // Auto-setup memory system when proxy starts
+  try {
+    const { autoSetup } = require('./scripts/memory-hook');
+    autoSetup().catch(() => {}); // Silently fail if hook fails
+  } catch (error) {
+    // Memory hook is optional
+  }
 });
 
 // Start Telegram polling (runs in background)
