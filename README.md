@@ -1,14 +1,14 @@
 # GLM Bedrock Proxy - MCP 1.0.0
 
-A dual-port proxy server that enables multiple AI clients (VS Code/GitHub Copilot and OpenHands) to access GLM models through AWS Bedrock Mantle.
+A multi-provider protocol proxy for VS Code and OpenHands. The production port 2999 process is owned by launchd; the optional port 3000 process is managed independently for OpenHands.
 
 ## What is This Repository?
 
 This is a **Node.js/Express proxy server** that:
-- Routes LLM requests to AWS Bedrock Mantle endpoint
-- Provides OpenAI-compatible API endpoints
-- Runs on **two ports simultaneously** to serve different clients
-- Integrates with Graphiti memory system for persistent AI memory
+- Routes Azure/SOL aliases to Azure, OpenRouter aliases to OpenRouter, and other requests to Bedrock/Mantle
+- Provides Anthropic- and OpenAI-compatible API endpoints
+- Supports separate managed instances for VS Code on port 2999 and OpenHands on port 3000
+- Provides curated repository knowledge for coding agents; Graphiti is not connected to proxy runtime
 
 ## Architecture
 
@@ -74,12 +74,9 @@ Both ports share the same proxy code and connect to the same Bedrock backend.
 
 ### 1. Start Dual-Port Proxy
 ```bash
-# Start both ports
+# Ensure launchd-owned port 2999 is healthy and start port 3000 if needed
 cd ~/aiFlow/future/mcp1.0.0
 ./start-dual-ports.sh
-
-# Or use the main AI startup script
-~/start-ai.sh
 ```
 
 ### 2. Verify Both Ports
@@ -121,10 +118,9 @@ ANTHROPIC_API_KEY=dummy
 ```
 
 **Status:**
-- Runs in terminal session s020 (background)
-- Process: Node.js ts-node
-- Logs: `~/glm-proxy-2999.log`
-- PID: `~/glm-proxy-2999.pid`
+- Owner: user LaunchAgent `com.adarsh.bedrock-proxy`
+- Status and lifecycle: `ai2 status`, `ai2 start`, `ai2 restart`
+- Logs: `ai2 logs`
 
 ### OpenHands (Port 3000)
 
@@ -144,63 +140,38 @@ OpenHands is configured to use this port in its settings file.
 ```
 
 **Status:**
-- Runs in terminal session s020 (background)
-- Process: Node.js ts-node
+- Managed independently from the port-2999 LaunchAgent
+- Started by `./start-dual-ports.sh` when its health endpoint is unavailable
 - Logs: `~/glm-proxy-3000.log`
-- PID: `~/glm-proxy-3000.pid`
+- PID record: `~/glm-proxy-3000.pid`
 
-## Memory System Integration
+## Agent Memory
 
-The proxy integrates with Graphiti memory system on startup:
+The proxy remains a stateless protocol gateway. It does not start Neo4j or Graphiti.
 
-```javascript
-// src/index.ts - Automatic memory setup
-try {
-  const { autoSetup } = require('./scripts/memory-hook');
-  autoSetup().catch(() => {}); // Silently fail if hook fails
-} catch (error) {
-  // Memory hook is optional
-}
-```
+Coding agents use curated, repository-scoped context instead:
 
-**Memory Components:**
-- Neo4j Database: bolt://localhost:7687
-- Graphiti Memory: ~/workspace/project/415bbbcd111a4a15ae5a9785d35276ef
-- Auto-initialized when proxy starts
+- `.github/agent-knowledge/PROXY_INDEX.json` is the retrieval entry point.
+- `.github/agent-knowledge/proxy-runtime.json` contains verified runtime facts and provenance.
+- `.github/copilot-instructions.md` defines retrieval and safe-write rules.
+- `.github/agents/ai2-coordinator.agent.md` provides the project-specific implementation workflow.
 
-See the memory system repo: https://github.com/Adarshagnihotri0/openhands-graphiti-memory
+A future Graphiti integration should be a separately managed service exposing explicit `search` and `remember` operations. It must not start from `src/index.ts` or store credentials, full prompts, or full model responses.
 
 ## Process Management
 
-### Check Running Processes
+Port 2999 has one owner: the user LaunchAgent `com.adarsh.bedrock-proxy`. Use `ai2` instead of starting or killing `ts-node` directly:
+
 ```bash
-# View both ports
-lsof -i :2999 -i :3000 | grep LISTEN
-
-# View PIDs
-cat ~/glm-proxy-2999.pid
-cat ~/glm-proxy-3000.pid
-
-# View processes
-ps aux | grep "ts-node.*index.ts" | grep -v grep
+ai2                 # Same as ai2 status; does not restart a healthy proxy
+ai2 start           # Load or recover the LaunchAgent when needed
+ai2 restart         # Explicitly replace the managed process
+ai2 logs            # Show recent launchd stdout and stderr
+ai2 agent           # Open this repository and show the coordinator workflow
+ai2 help
 ```
 
-### Stop Processes
-```bash
-# Kill by PID
-kill $(cat ~/glm-proxy-2999.pid)
-kill $(cat ~/glm-proxy-3000.pid)
-
-# Or kill by port
-lsof -ti :2999 | xargs kill -9
-lsof -ti :3000 | xargs kill -9
-```
-
-### Restart
-```bash
-# Use the startup script
-./start-dual-ports.sh
-```
+Every health-bearing command verifies that the listener PID belongs to launchd. `ai2` does not start OpenHands, port 3000, Neo4j, Graphiti, or Docker.
 
 ## Endpoints
 
@@ -216,16 +187,43 @@ Both ports expose identical endpoints:
 
 ## Environment Variables
 
-### .env Configuration
+The port-2999 LaunchAgent sets `PORT=2999` explicitly. Other launch modes may use `.env`:
+
 ```bash
-# Port configuration
-PORT=2999  # Default port (overridden by start-dual-ports.sh)
+# Outbound proxy chat forwarding to the private Telegram group
+TELEGRAM_FORWARD_CHATS=true
+TELEGRAM_CHAT_ID=-1004386786627
+TELEGRAM_BOT_TOKEN=enter_a_newly_rotated_token_locally
 
-# Telegram notifications
-TELEGRAM_ENABLED=true   # Port 2999
-TELEGRAM_ENABLED=false  # Port 3000
+# Streaming responses update one Telegram message in safe batches.
+# Telegram enforces rate limits, so values below 750 ms are clamped.
+TELEGRAM_STREAM_UPDATE_MS=1000
 
-# AWS Bedrock
+# Forwarded Markdown is rendered with Telegram HTML formatting. Headings,
+# emphasis, links, lists, quotations, and code are supported; unsafe HTML is escaped.
+# Telegram sends/edits do not invoke a model or consume additional LLM tokens.
+
+# The user-level VS Code Stop hook creates one forum topic lazily per workspace.
+# Grant the bot Manage Topics in the group's Administrators settings to enable it.
+# Until then, workspace responses continue to arrive in the General topic.
+# Topic names and thread IDs are cached privately in ~/.copilot/telegram-workspace-topics.json.
+
+# Optional inbound Telegram bot chat. The port-2999 LaunchAgent enables this
+# explicitly; other launch modes can opt in through their environment.
+TELEGRAM_POLLING_ENABLED=true
+
+# In a workspace forum topic, use /ask <message> to talk to GLM-5.
+# Owner-only project control uses /work <request> to create a read-only plan,
+# then /confirm <token> within 10 minutes to permit file edits in that same
+# mapped workspace. /cancel <token> discards a plan. /check build runs the
+# workspace's fixed, administrator-provisioned validator without a shell.
+# /clear, /history, /status, and /help remain topic-scoped chat commands.
+# Arbitrary shell commands are intentionally unavailable from Telegram.
+# Workspace roots and checks are configured privately in
+# ~/.copilot/telegram-workspace-topics.json (mode 600).
+
+# Provider credentials
+OPENROUTER_API_KEY=your_openrouter_key_here
 BEDROCK_MANTLE_API_KEY=your_key_here
 AWS_REGION=ap-south-1
 
@@ -239,25 +237,23 @@ REDIS_URL=redis://localhost:6379
 ## Logs
 
 ```bash
-# View port 2999 logs
-tail -f ~/glm-proxy-2999.log
+# View launchd-managed port 2999 stdout and stderr
+ai2 logs
 
-# View port 3000 logs
+# View independently managed port 3000 logs
 tail -f ~/glm-proxy-3000.log
-
-# View all proxy logs
-tail -f ~/glm-proxy.log
 ```
 
 ## Troubleshooting
 
 ### Port Already in Use
 ```bash
-# Kill existing processes
-lsof -ti :2999 | xargs kill -9
-lsof -ti :3000 | xargs kill -9
+# Port 2999 must remain owned by launchd.
+ai2 status
+ai2 restart
 
-# Restart
+# Inspect port 3000 without killing unrelated processes.
+lsof -nP -iTCP:3000 -sTCP:LISTEN
 ./start-dual-ports.sh
 ```
 
@@ -280,21 +276,17 @@ perl -e 'alarm 5; exec @ARGV' -- curl -s http://localhost:2999/health
 
 ### Start in Development Mode
 ```bash
-# Single port (default 2999)
-npm run dev
+# Isolated development instance; does not compete with launchd on port 2999.
+PORT=2998 TELEGRAM_POLLING_ENABLED=false npm run dev
 
-# Dual-port (recommended)
+# Ensure the managed 2999 and optional OpenHands 3000 instances are healthy.
 ./start-dual-ports.sh
 ```
 
-### Run Tests
-```bash
-npm test
-```
-
-### Build
+### Validate
 ```bash
 npm run build
+curl -fsS http://127.0.0.1:2999/health
 ```
 
 ## Repository Structure
@@ -302,29 +294,27 @@ npm run build
 ```
 mcp1.0.0/
 ├── src/
-│   ├── index.ts              # Main entry point (dual-port support)
-│   ├── server.ts             # Express server setup
-│   ├── bedrock.ts            # Bedrock API integration
-│   └── scripts/
-│       └── memory-hook.js    # Auto-setup memory on start
-├── start-dual-ports.sh      # Dual-port startup script
-├── DUAL_PORT_SETUP.md       # Setup documentation
-├── README.md                 # This file
-└── .env                      # Environment variables
-
-Log Files (in ~/):
-├── glm-proxy-2999.log        # Port 2999 logs
-├── glm-proxy-3000.log        # Port 3000 logs
-├── glm-proxy-2999.pid        # Port 2999 PID
-└── glm-proxy-3000.pid        # Port 3000 PID
+│   ├── index.ts              # Main entry point
+│   ├── server.ts             # Express server setup and routing
+│   └── bedrock.ts            # Bedrock API integration
+├── .github/
+│   ├── copilot-instructions.md
+│   ├── agents/
+│   │   └── ai2-coordinator.agent.md
+│   └── agent-knowledge/
+│       ├── PROXY_INDEX.json
+│       └── proxy-runtime.json
+├── start-dual-ports.sh
+├── docs/
+├── README.md
+└── .env
 ```
 
 ## Related Repositories
 
-- **Memory System:** https://github.com/Adarshagnihotri0/openhands-graphiti-memory
-  - Graphiti memory integration
-  - Neo4j graph database
-  - Port-agnostic configuration
+- **Historical memory experiment:** https://github.com/Adarshagnihotri0/openhands-graphiti-memory
+  - Not connected to this proxy runtime
+  - Requires a separate, explicit adapter before it can provide agent memory
 
 - **OpenHands:** https://github.com/All-Hands-AI/OpenHands
   - Autonomous AI agent
@@ -340,67 +330,4 @@ For issues:
 1. Check logs: `tail -f ~/glm-proxy-2999.log` or `tail -f ~/glm-proxy-3000.log`
 2. Check processes: `lsof -i :2999 -i :3000 | grep LISTEN`
 3. Restart: `./start-dual-ports.sh`
-4. Check memory system: `cd ~/workspace/project/415bbbcd111a4a15ae5a9785d35276ef`
-
-
----
-
-## Architecture
-
-**Bedrock Proxy** - Express.js server providing:
-
-- `/v1/messages` - Anthropic-compatible endpoint
-- `/v1/chat/completions` - OpenAI-compatible endpoint  
-- `/v1/models` - List available Bedrock models
-- `/health` - Health check endpoint
-
-### Components
-
-```
-bedrock-proxy/
-├── src/
-│   ├── index.ts           - Entry point
-│   ├── server.ts          - Express router + endpoints
-│   ├── bedrock.ts         - AWS Bedrock client
-│   ├── adapters.ts        - Protocol translation
-│   └── telegram-polling.ts - Optional notifications
-├── scripts/
-│   └── start-dual-ports.sh - Run on ports 2999 + 3000
-└── docs/
-    └── DUAL_PORT_SETUP.md  - Client configuration guide
-```
-
----
-
-## Features
-
-✅ **Anthropic API compatibility** - Drop-in replacement for Claude API  
-✅ **OpenAI API compatibility** - Works with tools expecting OpenAI format  
-✅ **Dual port support** - Port 2999 (VS Code) + Port 3000 (OpenHands)  
-✅ **Telegram notifications** - Optional progress updates  
-✅ **PostgreSQL tracing** - Optional request logging
-
----
-
-## Documentation
-
-- [Quick Reference](docs/QUICK_REFERENCE.md) - Complete setup guide
-- [Dual Port Setup](docs/DUAL_PORT_SETUP.md) - Multi-client configuration
-- [Architecture](docs/ARCHITECTURE.md) - Technical details
-- [Flow Diagram](docs/FLOW_DIAGRAM.md) - Request flow visualization
-
----
-
-## Requirements
-
-- Node.js 18+
-- AWS account with Bedrock access
-- (Optional) PostgreSQL for tracing
-- (Optional) Redis for caching
-- (Optional) Telegram bot for notifications
-
----
-
-## License
-
-MIT
+4. Check agent context: `.github/agent-knowledge/PROXY_INDEX.json`

@@ -34,7 +34,13 @@ done
 echo ""
 echo "Starting OpenHands Agent Canvas..."
 echo "  UI: http://localhost:8000"
-echo "  LLM backend: http://localhost:3000/v1 (Bedrock proxy → zai.glm-5)"
+echo "  LLM backend: http://localhost:3000/v1"
 echo ""
 
-agent-canvas
+export LLM_MODEL="openai/gpt-4.1"
+export LLM_BASE_URL="http://localhost:3000/v1"
+export LLM_API_KEY="dummy"
+export OPENAI_API_KEY="dummy"
+export AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-dummy}"
+
+exec agent-canvas

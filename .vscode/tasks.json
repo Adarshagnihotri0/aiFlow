@@ -4,7 +4,7 @@
     {
       "label": "Run Dev Server with Notification",
       "type": "shell",
-      "command": "npm run dev && afplay /System/Library/Sounds/Hero.aiff || afplay /System/Library/Sounds/Basso.aiff",
+      "command": "PORT=2998 TELEGRAM_POLLING_ENABLED=false npm run dev",
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
@@ -14,19 +14,13 @@
     {
       "label": "Build with Notification",
       "type": "shell",
-      "command": "npm run build && osascript -e 'display notification \"Build completed successfully\" with title \"Bedrock Proxy\" sound name \"Glass\"' || osascript -e 'display notification \"Build failed\" with title \"Bedrock Proxy\" sound name \"Basso\"'",
+      "command": "npm run build",
       "problemMatcher": ["$tsc"]
     },
     {
       "label": "Run Agent with Notification",
       "type": "shell",
-      "command": "npm run dev",
-      "options": {
-        "shell": {
-          "executable": "bash",
-          "args": ["-c"]
-        }
-      },
+      "command": "ai2 status",
       "problemMatcher": [],
       "runOptions": {
         "runOn": "default"

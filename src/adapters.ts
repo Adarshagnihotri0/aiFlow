@@ -132,6 +132,54 @@ export const AVAILABLE_MODELS = [
     created: 1747958400,
     owned_by: 'aws-bedrock',
   },
+  {
+    id: 'deepseek/deepseek-v4-flash-0731',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'deepseek',
+  },
+  {
+    id: 'deepseek-v4-flash',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'deepseek',
+  },
+  {
+    id: 'deepseek-v4',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'deepseek',
+  },
+  {
+    id: 'anthropic/claude-fable-5',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'anthropic',
+  },
+  {
+    id: 'fable-5',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'anthropic',
+  },
+  {
+    id: 'claude-fable-5',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'anthropic',
+  },
+  {
+    id: 'qwen/qwen3.8-max',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'qwen',
+  },
+  {
+    id: 'qwen-3.8-max',
+    object: 'model',
+    created: Date.now(),
+    owned_by: 'qwen',
+  },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -1,11 +1,8 @@
 #!/bin/bash
-# Script to run dev server with notification on completion
+set -euo pipefail
 
-echo "Starting development server..."
-echo "Press Ctrl+C to stop (you'll hear a notification sound)"
+# Port 2999 is owned by com.adarsh.bedrock-proxy; use 2998 for local development.
+echo "Starting development server on http://localhost:2998"
+echo "Press Ctrl+C to stop"
 
-# Trap exit to play sound on any termination
-trap 'afplay /System/Library/Sounds/Glass.aiff' EXIT
-
-# Run the dev server
-npm run dev
+PORT=2998 TELEGRAM_POLLING_ENABLED=false npm run dev

@@ -1,18 +1,15 @@
 # Dual-Port Proxy Setup
 
-This proxy runs on **two ports simultaneously** to serve different clients:
+The proxy can serve two clients through separately managed processes:
 
-- **Port 2999**: VS Code / GitHub Copilot (Telegram notifications enabled)
-- **Port 3000**: OpenHands (Telegram disabled for stability)
+- **Port 2999**: VS Code / GitHub Copilot, owned exclusively by `com.adarsh.bedrock-proxy`
+- **Port 3000**: OpenHands, started independently with Telegram disabled
 
 ## Quick Start
 
 ```bash
-# Start both ports
+# Recover the launchd service on 2999 and start 3000 only when needed.
 ./start-dual-ports.sh
-
-# Or use the main AI startup script
-~/start-ai.sh
 ```
 
 ## Architecture
@@ -51,12 +48,12 @@ perl -e 'alarm 5; exec @ARGV' -- curl -s -X POST http://localhost:3000/v1/chat/c
 ## Logs
 
 ```bash
-# View logs
-tail -f ~/glm-proxy-2999.log
-tail -f ~/glm-proxy-3000.log
+# Launchd-managed port 2999
+ai2 status
+ai2 logs
 
-# Check PIDs
-cat ~/glm-proxy-2999.pid
+# Independently managed port 3000
+tail -f ~/glm-proxy-3000.log
 cat ~/glm-proxy-3000.pid
 ```
 
@@ -64,25 +61,24 @@ cat ~/glm-proxy-3000.pid
 
 ### Port already in use
 ```bash
-# Kill processes on both ports
-lsof -ti :2999 | xargs kill -9
-lsof -ti :3000 | xargs kill -9
+# Never kill port 2999 directly; inspect or restart its owner.
+ai2 status
+ai2 restart
 
-# Restart
+# Inspect port 3000 before starting it.
+lsof -nP -iTCP:3000 -sTCP:LISTEN
 ./start-dual-ports.sh
 ```
 
 ### Telegram interference
-- Port 2999: Uses `TELEGRAM_ENABLED=true` (from .env)
-- Port 3000: Uses `TELEGRAM_ENABLED=false` (set explicitly)
+- Port 2999: Telegram behavior is configured by its LaunchAgent environment.
+- Port 3000: `TELEGRAM_ENABLED`, `TELEGRAM_POLLING_ENABLED`, and `TELEGRAM_FORWARD_CHATS` are set to `false` by the launcher.
 
 ### Health check fails
 ```bash
-# Check if processes are running
-ps aux | grep "ts-node.*index.ts"
-
-# Check if ports are listening
-lsof -i :2999 -i :3000 | grep LISTEN
+ai2 status
+curl -fsS http://127.0.0.1:2999/health
+curl -fsS http://127.0.0.1:3000/health
 ```
 
 ## Client Configuration
@@ -107,8 +103,4 @@ Configured in `~/.openhands/settings.json`:
 
 ## Integration with Memory System
 
-Both ports integrate with the Graphiti memory system:
-- Neo4j: bolt://localhost:7687
-- Memory auto-initialized on startup via `memory-hook.js`
-
-See `/Users/adarshagnihotri/start-ai.sh` for full stack startup.
+The proxy is stateless and does not start Graphiti, Neo4j, Docker, or other memory infrastructure. Any future memory adapter must run as a separately managed service and expose explicit operations.

@@ -1,8 +1,9 @@
-
 import type { Response } from 'express';
 import { STATIC_MODEL_ID } from './adapters';
 import { logger } from './utils/logger';
 import { cacheStreamResponse, clearStreamCache, generateRequestId } from './utils/redis-cache';
+import { playChatCompletionSoundAsync } from './utils/sound-notification';
+import { speakSummary } from './utils/voice-summary';
 
 // ════════════════════════════════════════════════════════════════════════════
 // Mantle client config
@@ -170,7 +171,8 @@ async function streamOpenAIAsAnthropicSSE(
   res: Response,
   requestId: string,
   responseText: string[],
-): Promise<void> {
+  onTextDelta?: (text: string) => void,
+): Promise<[string, number]> { // returns [stopReason, toolCount]
   const reader = upstream.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -214,6 +216,7 @@ async function streamOpenAIAsAnthropicSSE(
         });
       }
       responseText.push(text);
+      onTextDelta?.(text);
       cacheStreamResponse(requestId, text);
       sseWrite('content_block_delta', {
         type: 'content_block_delta',
@@ -279,6 +282,7 @@ async function streamOpenAIAsAnthropicSSE(
   });
   sseWrite('message_stop', { type: 'message_stop' });
   res.end();
+  return [stopReason, toolStarted.size];
 }
 
 async function readErrorBody(res: globalThis.Response): Promise<string> {
@@ -286,33 +290,6 @@ async function readErrorBody(res: globalThis.Response): Promise<string> {
     return await res.text();
   } catch {
     return '<unreadable error body>';
-  }
-}
-
-function notifyTelegram(fullText: string): void {
-  try {
-    if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) return;
-    const https = require('https');
-    const maxLen = 4000;
-    const textToSend = fullText.length > maxLen ? fullText.substring(0, maxLen) + '...\n[truncated]' : fullText;
-    const message = encodeURIComponent(`📱 Response:\n\n${textToSend}`);
-    const path = `/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${process.env.TELEGRAM_CHAT_ID}&text=${message}`;
-
-    const req = https.request(
-      { hostname: 'api.telegram.org', port: 443, path, method: 'GET', timeout: 5000 },
-      (res: any) => {
-        res.on('data', () => {});
-        res.on('error', (err: Error) => console.error('[Telegram Notify Error]', err.message));
-      },
-    );
-    req.on('error', (err: Error) => console.error('[Telegram Notify Error]', err.message));
-    req.on('timeout', () => {
-      req.destroy();
-      console.error('[Telegram Notify Error] Request timeout');
-    });
-    req.end();
-  } catch {
-    // Ignore notification errors — never let this break the response
   }
 }
 
@@ -401,9 +378,15 @@ export async function invokeModel(body: Record<string, unknown>): Promise<Record
  *  For everything else, call Mantle's OpenAI-compatible stream and translate each chunk into
  *  proper Anthropic SSE events on the fly. Either way, text deltas are skimmed off for Redis
  *  caching and the Telegram notification. */
-export async function invokeModelStream(body: Record<string, unknown>, res: Response): Promise<void> {
+export async function invokeModelStream(
+  body: Record<string, unknown>,
+  res: Response,
+  onTextDelta?: (text: string) => void,
+): Promise<string[]> {
   const requestId = generateRequestId();
   const responseText: string[] = [];
+  let stopReason = 'end_turn';
+  let toolCount = 0;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -438,6 +421,7 @@ export async function invokeModelStream(body: Record<string, unknown>, res: Resp
 
         buffer = extractAnthropicTextDeltas(buffer, (text) => {
           responseText.push(text);
+          onTextDelta?.(text);
           cacheStreamResponse(requestId, text);
         });
       }
@@ -457,7 +441,13 @@ export async function invokeModelStream(body: Record<string, unknown>, res: Resp
         throw new Error(`Mantle error ${upstream.status}: ${errText}`);
       }
 
-      await streamOpenAIAsAnthropicSSE(upstream, res, requestId, responseText);
+      [stopReason, toolCount] = await streamOpenAIAsAnthropicSSE(
+        upstream,
+        res,
+        requestId,
+        responseText,
+        onTextDelta,
+      );
     }
   } catch (error) {
     console.error('[Stream Error]', error);
@@ -466,7 +456,11 @@ export async function invokeModelStream(body: Record<string, unknown>, res: Resp
     await clearStreamCache(requestId);
   }
 
-  notifyTelegram(responseText.join(''));
+  if (stopReason === 'end_turn') {
+    playChatCompletionSoundAsync();
+    await speakSummary(responseText.join(''), toolCount);
+  }
+  return responseText;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -528,10 +522,15 @@ export async function invokeModelOpenAI(body: Record<string, unknown>): Promise<
 }
 
 /** Streaming: pipe Mantle's OpenAI-format SSE chunks straight through. */
-export async function invokeModelStreamOpenAI(body: Record<string, unknown>, res: Response): Promise<void> {
+export async function invokeModelStreamOpenAI(
+  body: Record<string, unknown>,
+  res: Response,
+  onTextDelta?: (text: string) => void,
+): Promise<string[]> {
   const payload = { ...buildOpenAIPayload(body), stream: true };
   const requestId = generateRequestId();
   const responseText: string[] = [];
+  let finishReason = 'stop';
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -564,8 +563,13 @@ export async function invokeModelStreamOpenAI(body: Record<string, unknown>, res
 
       buffer = extractOpenAIDeltas(buffer, (text) => {
         responseText.push(text);
+        onTextDelta?.(text);
         cacheStreamResponse(requestId, text);
       });
+
+      // track finish_reason to detect tool_calls vs stop
+      const match = chunkStr.match(/"finish_reason"\s*:\s*"([^"]+)"/);
+      if (match) finishReason = match[1];
     }
 
     res.write('data: [DONE]\n\n');
@@ -577,7 +581,11 @@ export async function invokeModelStreamOpenAI(body: Record<string, unknown>, res
     await clearStreamCache(requestId);
   }
 
-  notifyTelegram(responseText.join(''));
+  if (finishReason !== 'tool_calls') {
+    playChatCompletionSoundAsync();
+    await speakSummary(responseText.join(''));
+  }
+  return responseText;
 }
 
 // import {
@@ -810,6 +818,7 @@ export async function invokeModelStreamOpenAI(body: Record<string, unknown>, res
 // export async function invokeModelStreamOpenAI(
 //   body: Record<string, unknown>,
 //   res: Response,
+//   onTextDelta?: (text: string) => void,
 // ): Promise<void> {
 //   const input = openaiToConverseInput(body) as unknown as ConverseStreamCommandInput;
 

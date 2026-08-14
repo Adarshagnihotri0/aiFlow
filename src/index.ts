@@ -14,21 +14,14 @@ app.listen(PORT, () => {
   console.log('    export ANTHROPIC_API_KEY=dummy');
   console.log('    claude');
   console.log('');
-
-  // Auto-setup memory system when proxy starts
-  try {
-    const { autoSetup } = require('./scripts/memory-hook');
-    autoSetup().catch(() => {}); // Silently fail if hook fails
-  } catch (error) {
-    // Memory hook is optional
-  }
 });
 
-// Start Telegram polling (runs in background)
-startTelegramPolling().catch((error) => {
-  console.error('[Telegram] Fatal polling error:', error);
-  process.exit(1);
-});
+// Inbound Telegram chat is a separate opt-in from outbound proxy forwarding.
+if (process.env.TELEGRAM_POLLING_ENABLED === 'true') {
+  startTelegramPolling().catch((error) => {
+    console.error('[Telegram] Fatal polling error:', error);
+  });
+}
 
 // Handle shutdown gracefully
 process.on('SIGINT', () => {

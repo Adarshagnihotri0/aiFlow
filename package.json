@@ -5,13 +5,14 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "build:notify": "npm run build && afplay /System/Library/Sounds/Hero.aiff || afplay /System/Library/Sounds/Basso.aiff",
+    "build:notify": "npm run build",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
-    "dev:notify": "npm run dev && afplay /System/Library/Sounds/Glass.aiff"
+    "dev:notify": "npm run dev"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.758.0",
+    "@elevenlabs/elevenlabs-js": "^2.63.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "ioredis": "^5.11.1",

@@ -1,0 +1,95 @@
+{
+  "schema": "1.0.0",
+  "verifiedAt": "2026-08-15",
+  "facts": [
+    {
+      "id": "runtime-entrypoint",
+      "fact": "src/index.ts starts the Express app. Inbound Telegram polling starts only when TELEGRAM_POLLING_ENABLED=true; the proxy is a stateless protocol gateway and does not initialize memory infrastructure.",
+      "evidence": [
+        "src/index.ts",
+        "npm run build"
+      ]
+    },
+    {
+      "id": "port-2999-owner",
+      "fact": "On this Mac, port 2999 is explicitly owned by the user LaunchAgent com.adarsh.bedrock-proxy. The ai2 command defaults to non-disruptive status; start loads or recovers the service, restart is explicit, logs shows both launchd logs, and agent opens the repository with coordinator guidance.",
+      "evidence": [
+        "~/Library/LaunchAgents/com.adarsh.bedrock-proxy.plist",
+        "~/start-ai2.sh",
+        "ai2 status",
+        "ai2 restart",
+        "curl http://localhost:2999/health"
+      ]
+    },
+    {
+      "id": "routing",
+      "fact": "Model IDs containing azure, gpt-4.1, or -sol route to Azure; DeepSeek, Fable, and Qwen aliases route to OpenRouter; remaining models route to Bedrock/Mantle.",
+      "evidence": [
+        "src/server.ts"
+      ]
+    },
+    {
+      "id": "default-model",
+      "fact": "The repository default Bedrock/Mantle model ID is zai.glm-5.",
+      "evidence": [
+        "src/adapters.ts"
+      ]
+    },
+    {
+      "id": "openhands",
+      "fact": "OpenHands is configured separately under ~/.openhands and targets the proxy OpenAI-compatible API on port 3000. Port 3000 lifecycle is not owned by the port-2999 LaunchAgent.",
+      "evidence": [
+        "~/.openhands/settings.json",
+        "openhands-start.sh"
+      ]
+    },
+    {
+      "id": "notifications",
+      "fact": "When TELEGRAM_FORWARD_CHATS=true and credentials are configured, all proxy API routes forward the latest user turn and successful assistant completion through one best-effort Telegram service. Azure, Bedrock, and OpenRouter sync and stream paths are covered. Forwarded Markdown is rendered as escaped Telegram HTML, and streaming edits preserve every emitted character while batching API calls. On this Mac, a user-level VS Code Stop hook in ~/.copilot/hooks forwards each completed non-tool agent response from any workspace through the same formatter, with message-ID deduplication. The hook lazily routes each workspace to a forum topic and privately caches topic thread IDs; if the bot lacks Manage Topics, delivery falls back to General. Hopper is a forum supergroup, @Hopperchatbot has Manage Topics, and live creation plus rich-text delivery to Workspace | mcp1.0.0 succeeded on 2026-08-15. Completion sound uses /usr/bin/afplay.",
+      "evidence": [
+        "src/server.ts",
+        "src/services/telegram-forwarder.ts",
+        "src/openrouter-client.ts",
+        "src/utils/sound-notification.ts",
+        "~/.copilot/hooks/telegram-response.json",
+        "~/.copilot/hooks/telegram-response.js",
+        "npm run build",
+        "offline rich telegram-forwarder assertions",
+        "synthetic Stop hook delivery and replay assertion",
+        "live workspace delivery fallback check",
+        "live workspace topic creation and rich-text delivery check"
+      ]
+    },
+    {
+      "id": "telegram-inbound",
+      "fact": "The port-2999 LaunchAgent enables topic-aware inbound Telegram polling. /ask invokes the default GLM-5 model. Owner-only project control uses /work for a read-only plan and a 10-minute single-use /confirm token before Claude Code may edit files in the same privately mapped workspace; /cancel invalidates pending work. /check runs only administrator-provisioned executables and arguments with shell disabled. Arbitrary shell access is not exposed. Conversation and confirmation state are held only in memory and reset by a proxy restart.",
+      "evidence": [
+        "src/telegram-polling.ts",
+        "src/services/workspace-agent.ts",
+        "~/Library/LaunchAgents/com.adarsh.bedrock-proxy.plist",
+        "~/.copilot/telegram-workspace-topics.json mode 600",
+        "npm run build",
+        "read-only plan fingerprint remained unchanged",
+        "disposable confirmed-edit fixture created the expected file without Bash",
+        "fixed workspace build check passed",
+        "ai2 status",
+        "Telegram getMyCommands returned all nine commands",
+        "Telegram group creator authorization check passed"
+      ]
+    },
+    {
+      "id": "memory-status",
+      "fact": "Graphiti is not connected to runtime code. The proxy does not start or configure memory infrastructure.",
+      "evidence": [
+        "src/index.ts",
+        ".github/copilot-instructions.md"
+      ]
+    }
+  ],
+  "invariants": [
+    "Keep provider routing independent from agent memory.",
+    "Use one process owner per port.",
+    "Never persist credentials, full prompts, or full model responses as agent memory.",
+    "Validate source claims with build, health, or focused runtime checks before updating memory."
+  ]
+}

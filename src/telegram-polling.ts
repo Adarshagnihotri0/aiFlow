@@ -1,447 +1,390 @@
 import https from 'https';
+import { STATIC_MODEL_ID } from './adapters';
 import { invokeModelOpenAI } from './bedrock';
+import { forwardTelegramThreadText } from './services/telegram-forwarder';
+import {
+  createPendingWork,
+  PendingWork,
+  resolveWorkspace,
+  runWorkspaceAgent,
+  runWorkspaceCheck,
+  workspaceFingerprint,
+} from './services/workspace-agent';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const TELEGRAM_ENABLED = process.env.TELEGRAM_ENABLED !== 'false'; // Default: true, set to 'false' to disable
+const TELEGRAM_ENABLED = process.env.TELEGRAM_ENABLED !== 'false';
+const MAX_PROMPT_LENGTH = 12000;
+const MAX_HISTORY_MESSAGES = 20;
+const TELEGRAM_REQUEST_TIMEOUT_MS = 35000;
 
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface TelegramMessage {
+  message_id: number;
+  message_thread_id?: number;
+  text?: string;
+  from?: {
+    id?: number;
+    is_bot?: boolean;
+  };
+  chat?: {
+    id?: number;
+  };
+}
+
+interface TelegramChatMember {
+  status?: string;
+}
+
+interface TelegramUpdate {
+  update_id: number;
+  message?: TelegramMessage;
+}
+
+const histories = new Map<string, ConversationMessage[]>();
+const pendingWork = new Map<string, PendingWork>();
 let lastUpdateId = 0;
 let isProcessing = false;
-let messageHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-
-// Rate-limit error logging
 let lastTelegramError = 0;
-const ERROR_LOG_INTERVAL = 60000; // Only log once per minute
+const ERROR_LOG_INTERVAL_MS = 60000;
 
-// Telegram disabled message (shown once)
-let telegramDisabledShown = false;
-
-function logTelegramDisabled(): void {
-  if (!telegramDisabledShown) {
-    console.log('ℹ️  Telegram notifications disabled via TELEGRAM_ENABLED=false');
-    telegramDisabledShown = true;
-  }
+function logTelegramError(context: string, error: unknown): void {
+  const now = Date.now();
+  if (now - lastTelegramError <= ERROR_LOG_INTERVAL_MS) return;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[Telegram] ${context}: ${message}`);
+  lastTelegramError = now;
 }
 
-function logTelegramError(context: string, error: Error | string): void {
-  const now = Date.now();
-  if (now - lastTelegramError > ERROR_LOG_INTERVAL) {
-    console.error(`[Telegram] ${context}:`, typeof error === 'string' ? error : error.message);
-    lastTelegramError = now;
-  }
-}
+function telegramRequest<T>(method: string, payload: Record<string, unknown>, timeout = 10000): Promise<T> {
+  if (!TOKEN) return Promise.reject(new Error('TELEGRAM_BOT_TOKEN is not configured'));
+  const body = JSON.stringify(payload);
 
-// Track Telegram API health
-let telegramAvailable = true;
-let lastTelegramCheck = 0;
-const CHECK_INTERVAL = 300000; // Check every 5 minutes
+  return new Promise<T>((resolve, reject) => {
+    const request = https.request(
+      {
+        hostname: 'api.telegram.org',
+        port: 443,
+        path: `/bot${TOKEN}/${method}`,
+        method: 'POST',
+        timeout,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (response) => {
+        let responseBody = '';
+        response.on('data', (chunk) => {
+          responseBody += String(chunk);
+        });
+        response.on('end', () => {
+          try {
+            const parsed = JSON.parse(responseBody) as {
+              ok?: boolean;
+              result?: T;
+              description?: string;
+            };
+            if (parsed.ok && parsed.result !== undefined) {
+              resolve(parsed.result);
+              return;
+            }
+            reject(new Error(parsed.description || `Telegram API returned HTTP ${response.statusCode ?? 'unknown'}`));
+          } catch {
+            reject(new Error(`Telegram API returned HTTP ${response.statusCode ?? 'unknown'}`));
+          }
+        });
+      },
+    );
 
-async function checkTelegramAvailability(): Promise<boolean> {
-  const now = Date.now();
-  if (now - lastTelegramCheck < CHECK_INTERVAL) {
-    return telegramAvailable;
-  }
-  
-  lastTelegramCheck = now;
-  
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'api.telegram.org',
-      port: 443,
-      path: '/',
-      method: 'GET',
-      timeout: 5000,
-      agent: false,
-    }, (res) => {
-      telegramAvailable = res.statusCode === 200 || res.statusCode === 401;
-      resolve(telegramAvailable);
-    });
-    
-    req.on('error', () => {
-      telegramAvailable = false;
-      resolve(false);
-    });
-    
-    req.on('timeout', () => {
-      req.destroy();
-      telegramAvailable = false;
-      resolve(false);
-    });
-    
-    req.end();
+    request.on('error', reject);
+    request.on('timeout', () => request.destroy(new Error('Telegram request timed out')));
+    request.end(body);
   });
 }
 
-/**
- * Fetch updates from Telegram API with retry logic
- */
-async function getUpdates(): Promise<any[]> {
-  // Skip if Telegram disabled
-  if (!TELEGRAM_ENABLED) {
-    logTelegramDisabled();
+async function getUpdates(): Promise<TelegramUpdate[]> {
+  try {
+    return await telegramRequest<TelegramUpdate[]>(
+      'getUpdates',
+      {
+        offset: lastUpdateId + 1,
+        timeout: 30,
+        allowed_updates: ['message'],
+      },
+      TELEGRAM_REQUEST_TIMEOUT_MS,
+    );
+  } catch (error) {
+    logTelegramError('Polling failed', error);
     return [];
   }
-  
-  // Check if Telegram is available before making request
-  const available = await checkTelegramAvailability();
-  if (!available) {
-    return []; // Skip polling if Telegram is unreachable
+}
+
+async function discardPendingUpdates(): Promise<void> {
+  const pending = await telegramRequest<TelegramUpdate[]>('getUpdates', {
+    offset: -1,
+    timeout: 0,
+    allowed_updates: ['message'],
+  });
+  for (const update of pending) {
+    lastUpdateId = Math.max(lastUpdateId, update.update_id);
   }
-  
-  return new Promise((resolve) => {
-    const path = `/bot${TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
-    
-    const req = https.request({
-      hostname: 'api.telegram.org',
-      port: 443,
-      path: path,
-      method: 'GET',
-      timeout: 35000,
-      agent: false, // Disable connection pooling
-    }, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.ok && Array.isArray(json.result)) {
-            telegramAvailable = true; // Mark as available on success
-            resolve(json.result);
-          } else {
-            logTelegramError('Invalid response', json.description || 'Unknown error');
-            resolve([]);
-          }
-        } catch (error) {
-          logTelegramError('Parse error', error as Error);
-          resolve([]);
-        }
-      });
-    });
-    
-    req.on('error', (err) => {
-      telegramAvailable = false;
-      logTelegramError('Fetch error', err);
-      resolve([]);
-    });
-    
-    req.on('timeout', () => {
-      telegramAvailable = false;
-      logTelegramError('Request timeout', 'long polling timeout');
-      req.destroy();
-      resolve([]);
-    });
-    
-    req.end();
+}
+
+async function registerCommands(): Promise<void> {
+  await telegramRequest<boolean>('setMyCommands', {
+    commands: [
+      { command: 'ask', description: 'Ask GLM-5 in this workspace topic' },
+      { command: 'work', description: 'Plan project work for confirmation' },
+      { command: 'confirm', description: 'Confirm a pending project change' },
+      { command: 'cancel', description: 'Cancel a pending project change' },
+      { command: 'check', description: 'Run a configured project check' },
+      { command: 'clear', description: 'Clear this topic conversation' },
+      { command: 'history', description: 'Show this topic history size' },
+      { command: 'status', description: 'Show bot and model status' },
+      { command: 'help', description: 'Show available phone commands' },
+    ],
   });
 }
 
-/**
- * Send message to Telegram with retry logic
- */
-async function sendTelegramMessage(text: string, retries = 3): Promise<boolean> {
-  // Skip if Telegram disabled
-  if (!TELEGRAM_ENABLED) {
-    logTelegramDisabled();
-    return false;
+async function sendTypingAction(messageThreadId?: number): Promise<void> {
+  if (!CHAT_ID) return;
+  const payload: Record<string, unknown> = {
+    chat_id: CHAT_ID,
+    action: 'typing',
+  };
+  if (messageThreadId !== undefined) payload['message_thread_id'] = messageThreadId;
+  await telegramRequest<boolean>('sendChatAction', payload);
+}
+
+function conversationKey(messageThreadId?: number): string {
+  return messageThreadId === undefined ? 'general' : String(messageThreadId);
+}
+
+function parseCommand(text: string): { command?: string; argument: string } {
+  const match = text.trim().match(/^\/([a-z]+)(?:@[a-z0-9_]+)?(?:\s+([\s\S]*))?$/i);
+  if (!match) return { argument: text.trim() };
+  return {
+    command: match[1].toLowerCase(),
+    argument: (match[2] || '').trim(),
+  };
+}
+
+function helpText(): string {
+  return [
+    '**Phone commands**',
+    '',
+    '`/ask <message>` - ask GLM-5 in this topic',
+    '`/work <request>` - create an owner-only project plan',
+    '`/confirm <token>` - approve the planned file changes',
+    '`/cancel <token>` - cancel pending work',
+    '`/check build` - run this workspace build check',
+    '`/clear` - clear only this topic history',
+    '`/history` - show this topic history size',
+    '`/status` - show the active model',
+    '`/help` - show these commands',
+    '',
+    'Project work is restricted to the group creator, the workspace mapped to this topic, and a 10-minute single-use confirmation.',
+  ].join('\n');
+}
+
+async function isChatCreator(userId?: number): Promise<boolean> {
+  if (!userId || !CHAT_ID) return false;
+  const member = await telegramRequest<TelegramChatMember>('getChatMember', {
+    chat_id: CHAT_ID,
+    user_id: userId,
+  });
+  return member.status === 'creator';
+}
+
+function removeExpiredWork(): void {
+  const now = Date.now();
+  for (const [token, pending] of pendingWork) {
+    if (pending.expiresAt <= now) pendingWork.delete(token);
   }
-  
-  // Check if Telegram is available before making request
-  const available = await checkTelegramAvailability();
-  if (!available) {
-    logTelegramError('Send skipped', 'Telegram API unreachable');
-    return false;
+}
+
+async function processWorkspaceCommand(
+  command: string,
+  argument: string,
+  message: TelegramMessage,
+): Promise<string> {
+  const ownerId = message.from?.id;
+  const threadId = message.message_thread_id;
+  if (!(await isChatCreator(ownerId))) {
+    return 'Project commands are restricted to the Telegram group creator.';
   }
-  
-  const maxLen = 4000;
-  const textToSend = text.length > maxLen 
-    ? text.substring(0, maxLen) + '...\n[truncated]'
-    : text;
-  
-  // Use parse_mode=Markdown for better formatting
-  const path = `/bot${TOKEN}/sendMessage?chat_id=${CHAT_ID}&text=${encodeURIComponent(textToSend)}&parse_mode=Markdown`;
-  
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const success = await new Promise<boolean>((resolve) => {
-        const req = https.request({
-          hostname: 'api.telegram.org',
-          port: 443,
-          path: path,
-          method: 'GET',
-          timeout: 10000, // 10 second timeout
-          agent: false, // Disable connection pooling
-        }, (res) => {
-          let data = '';
-          res.on('data', (chunk) => data += chunk);
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              if (json.ok) {
-                telegramAvailable = true; // Mark as available on success
-                resolve(true);
-              } else {
-                logTelegramError('Send failed', json.description);
-                resolve(false);
-              }
-            } catch {
-              resolve(false);
-            }
-          });
-        });
-        
-        req.on('error', (err) => {
-          telegramAvailable = false;
-          if (attempt === retries) {
-            logTelegramError(`Send error after ${retries} attempts`, err);
-          }
-          resolve(false);
-        });
-        
-        req.on('timeout', () => {
-          telegramAvailable = false;
-          if (attempt === retries) {
-            logTelegramError('Send timeout', `gave up after ${retries} attempts`);
-          }
-          req.destroy();
-          resolve(false);
-        });
-        
-        req.end();
-      });
-      
-      if (success) return true;
-      
-      // Wait before retry (exponential backoff)
-      if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-      }
-    } catch (error) {
-      if (attempt === retries) {
-        logTelegramError(`Send error after ${retries} attempts`, error as Error);
-      }
+  if (!ownerId || threadId === undefined) {
+    return 'Run project commands inside a configured workspace topic.';
+  }
+
+  removeExpiredWork();
+  if (command === 'cancel') {
+    const pending = pendingWork.get(argument);
+    if (!pending || pending.ownerId !== ownerId || pending.threadId !== threadId) {
+      return 'No matching pending project request was found.';
     }
+    pendingWork.delete(argument);
+    return '**Project request cancelled.**';
   }
-  
-  return false;
+
+  if (command === 'confirm') {
+    const pending = pendingWork.get(argument);
+    if (!pending || pending.ownerId !== ownerId || pending.threadId !== threadId) {
+      return 'No matching pending project request was found.';
+    }
+    pendingWork.delete(argument);
+    const currentFingerprint = await workspaceFingerprint(pending.workspace);
+    if (currentFingerprint !== pending.fingerprint) {
+      return 'The workspace changed after the plan was created. Run `/work` again to review a fresh plan.';
+    }
+    const result = await runWorkspaceAgent(pending.workspace, pending.request, 'execute');
+    return `**Project changes completed in ${pending.workspace.name}**\n\n${result}\n\nRun \`/check build\` to validate.`;
+  }
+
+  const workspace = await resolveWorkspace(threadId);
+  if (!workspace) {
+    return 'This topic is not enabled for project execution.';
+  }
+
+  if (command === 'check') {
+    const checkName = argument || 'build';
+    const result = await runWorkspaceCheck(workspace, checkName);
+    return `**${workspace.name}: ${checkName} passed**\n\n${result}`;
+  }
+
+  if (!argument) return 'Usage: `/work describe the project change`';
+  if (argument.length > MAX_PROMPT_LENGTH) {
+    return `Request is too long. Keep it under **${MAX_PROMPT_LENGTH.toLocaleString()} characters**.`;
+  }
+  const fingerprint = await workspaceFingerprint(workspace);
+  const plan = await runWorkspaceAgent(workspace, argument, 'plan');
+  const pending = createPendingWork(argument, ownerId, threadId, workspace, fingerprint);
+  pendingWork.set(pending.token, pending);
+  return [
+    `**Project plan for ${workspace.name}**`,
+    '',
+    plan,
+    '',
+    'No files have changed.',
+    `Confirm within 10 minutes with \`/confirm ${pending.token}\``,
+    `Cancel with \`/cancel ${pending.token}\``,
+  ].join('\n');
 }
 
-/**
- * Send typing indicator to Telegram
- */
-async function sendTypingAction(): Promise<void> {
-  const path = `/bot${TOKEN}/sendChatAction?chat_id=${CHAT_ID}&action=typing`;
-  const req = https.get({
-    hostname: 'api.telegram.org',
-    port: 443,
-    path: path,
-    method: 'GET',
-    timeout: 5000
-  }, (res) => {
-    // Consume response to avoid memory leaks
-    res.on('data', () => {});
-    res.on('error', (err) => {
-      console.error('[Telegram Typing Action Error]', err.message);
+async function processMessage(text: string, key: string, message: TelegramMessage): Promise<string> {
+  const { command, argument } = parseCommand(text);
+
+  if (command && ['work', 'confirm', 'cancel', 'check'].includes(command)) {
+    return processWorkspaceCommand(command, argument, message);
+  }
+
+  if (command === 'help' || command === 'start') return helpText();
+  if (command === 'status') {
+    return `**Ready**\n\nModel: \`${STATIC_MODEL_ID}\`\nTopic history: ${histories.get(key)?.length ?? 0} messages`;
+  }
+  if (command === 'clear' || command === 'reset') {
+    histories.delete(key);
+    return '**Conversation cleared**\n\nOnly this Telegram topic was reset.';
+  }
+  if (command === 'history') {
+    return `This topic currently has **${histories.get(key)?.length ?? 0}** conversation messages.`;
+  }
+  if (command && command !== 'ask') return helpText();
+
+  const prompt = command === 'ask' ? argument : argument.replace(/^@Hopperchatbot\s*/i, '').trim();
+  if (!prompt) return 'Usage: `/ask describe what you need`';
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    return `Message is too long. Keep it under **${MAX_PROMPT_LENGTH.toLocaleString()} characters**.`;
+  }
+
+  const history = histories.get(key) || [];
+  history.push({ role: 'user', content: prompt });
+  if (history.length > MAX_HISTORY_MESSAGES) history.splice(0, history.length - MAX_HISTORY_MESSAGES);
+
+  try {
+    const response = await invokeModelOpenAI({
+      messages: [
+        {
+          role: 'system',
+          content: 'You are Hopper, a concise engineering assistant replying through Telegram. Use Markdown. You may analyze, explain, and plan, but do not claim to have edited files, run commands, or completed actions because this Telegram channel has no workspace tools.',
+        },
+        ...history,
+      ],
+      max_tokens: 2000,
+      temperature: 0.4,
     });
-  });
-  
-  req.on('error', (err) => {
-    console.error('[Telegram Typing Action Error]', err.message);
-  });
-  
-  req.on('timeout', () => {
-    req.destroy();
-    console.error('[Telegram Typing Action Error] Request timeout');
-  });
-  
-  req.end();
+    const choices = response['choices'] as Array<{ message?: { content?: string } }> | undefined;
+    const responseText = choices?.[0]?.message?.content?.trim() || 'The model returned no text response.';
+    history.push({ role: 'assistant', content: responseText });
+    if (history.length > MAX_HISTORY_MESSAGES) history.splice(0, history.length - MAX_HISTORY_MESSAGES);
+    histories.set(key, history);
+    return responseText;
+  } catch (error) {
+    logTelegramError('Model request failed', error);
+    history.pop();
+    histories.set(key, history);
+    return 'The model request failed. Please try again in a moment.';
+  }
 }
 
-/**
- * Process incoming Telegram message
- */
-async function processMessage(text: string): Promise<string> {
-// Handle special commands
-if (text === '/clear' || text === '/reset') {
-messageHistory = [];
-return '✅ Conversation history cleared. Starting fresh!';
-}
-
-if (text === '/history') {
-if (messageHistory.length === 0) {
-return 'No conversation history yet.';
-}
-
-return `Conversation history (${messageHistory.length} messages):\n\n${messageHistory
-  .map(
-    (m, i) =>
-      `${i + 1}. ${m.role}: ${m.content.substring(0, 100)}...`
-  )
-  .join('\n')}`;
-}
-
-// Add user message to history
-messageHistory.push({
-role: 'user',
-content: text,
-});
-
-// Keep only last 20 messages
-if (messageHistory.length > 20) {
-messageHistory = messageHistory.slice(-20);
-}
-
-try {
-const response = await invokeModelOpenAI({
-messages: messageHistory,
-max_tokens: 2000,
-temperature: 0.7,
-});
-
-const choices = response.choices as Array<{
-  message?: { content?: string };
-}>;
-
-const responseText =
-  choices?.[0]?.message?.content ??
-  'Sorry, I could not process that.';
-
-// Save assistant response
-messageHistory.push({
-  role: 'assistant',
-  content: responseText,
-});
-
-return responseText;
-
-} catch (error) {
-console.error('[Telegram] Error processing message:', error);
-
-return 'Sorry, an error occurred while processing your message.';
-
-}
-}
-
-/**
- * Start Telegram polling loop
- */
 export async function startTelegramPolling(): Promise<void> {
-  // Check if Telegram is disabled via environment variable
   if (!TELEGRAM_ENABLED) {
-    console.log('ℹ️  Telegram polling disabled via TELEGRAM_ENABLED=false');
-    console.log('    Beep sounds will still work for Claude Code responses');
-    console.log('');
+    console.log('[Telegram] Inbound polling disabled by TELEGRAM_ENABLED=false');
     return;
   }
-  
   if (!TOKEN || !CHAT_ID) {
-    console.log('⚠️  Telegram polling disabled: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID required');
-    console.log('    Add these environment variables or set TELEGRAM_ENABLED=false to silence this message');
-    console.log('');
+    console.log('[Telegram] Inbound polling disabled: bot token and chat ID are required');
     return;
   }
-  
-  // Check Telegram availability on startup
-  const available = await checkTelegramAvailability();
-  if (!available) {
-    console.log('⚠️  Telegram API unreachable - polling disabled until connectivity restored');
-    console.log('    Telegram notifications will not work until network connectivity is fixed');
-    console.log('    Set TELEGRAM_ENABLED=false to disable Telegram completely');
+
+  try {
+    await discardPendingUpdates();
+    await registerCommands();
+  } catch (error) {
+    logTelegramError('Startup synchronization failed', error);
   }
-  
-  console.log('✓ Telegram polling started');
-  console.log(`  Chat ID: ${CHAT_ID}`);
-  console.log(`  Status: ${available ? '✅ Connected' : '❌ Unreachable (will retry every 5 minutes)'}`);
-  console.log('');
-  console.log('  Commands:');
-  console.log('    /clear - Clear conversation history');
-  console.log('    /reset - Same as /clear');
-  console.log('    /history - View conversation history');
-  console.log('');
-  
-  // Continuous polling loop
+
+  console.log('[Telegram] Bidirectional topic polling started');
+  console.log('[Telegram] Phone entry point: /ask <message>');
+
   while (true) {
-    try {
-      // Skip if still processing previous message
-      if (isProcessing) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
-      }
-      
-      // Get updates
-      const updates = await getUpdates();
-      
-      for (const update of updates) {
-        // Update the last update ID
-        lastUpdateId = update.update_id;
-        
-        // Validate chat ID
-        if (update.message?.chat?.id?.toString() !== CHAT_ID) {
-          console.log(`[Telegram] Ignoring message from different chat: ${update.message?.chat?.id}`);
-          continue;
-        }
-        
-        const text = update.message?.text;
-        
-        // Skip empty messages
-        if (!text) {
-          continue;
-        }
-        
-        // Log all messages including commands
-        console.log(`[Telegram] Received: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
-        
-        // Skip very short messages (likely accidental)
-        if (text.trim().length < 2 && !text.startsWith('/')) {
-          continue;
-        }
-        
-        // Mark as processing
-        isProcessing = true;
-        
-        // Send typing indicator
-        sendTypingAction().catch(() => {});
-        
-        // Process and respond
-        const startTime = Date.now();
-        const response = await processMessage(text);
-        const elapsed = Date.now() - startTime;
-        
-        // Send response
-        const sent = await sendTelegramMessage(response);
-        
-        if (sent) {
-          console.log(`[Telegram] Replied in ${elapsed}ms (${response.length} chars)`);
-        }
-        
-        // Add small delay before processing next message
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Release processing lock
+    const updates = await getUpdates();
+    for (const update of updates) {
+      lastUpdateId = Math.max(lastUpdateId, update.update_id);
+      const message = update.message;
+      if (!message || message.from?.is_bot) continue;
+      if (message.chat?.id?.toString() !== CHAT_ID) continue;
+      const text = message.text?.trim();
+      if (!text || isProcessing) continue;
+
+      isProcessing = true;
+      const messageThreadId = message.message_thread_id;
+      const key = conversationKey(messageThreadId);
+      const startedAt = Date.now();
+
+      try {
+        await sendTypingAction(messageThreadId).catch(() => undefined);
+        const response = await processMessage(text, key, message);
+        await forwardTelegramThreadText('Hopper | GLM-5', response, messageThreadId);
+        console.log(`[Telegram] Replied in topic ${key} after ${Date.now() - startedAt}ms`);
+      } catch (error) {
+        logTelegramError('Message processing failed', error);
+      } finally {
         isProcessing = false;
       }
-      
-      // Small delay between polls
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-    } catch (error) {
-      console.error('[Telegram] Polling error:', error);
-      // Wait longer on error to avoid spam
-      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   }
 }
 
-/**
- * Clear conversation history (exported for potential external use)
- */
 export function clearHistory(): void {
-  messageHistory = [];
-  console.log('[Telegram] Conversation history cleared');
+  histories.clear();
 }
 
-/**
- * Get current history length (exported for potential external use)
- */
 export function getHistoryLength(): number {
-  return messageHistory.length;
+  return Array.from(histories.values()).reduce((total, history) => total + history.length, 0);
 }

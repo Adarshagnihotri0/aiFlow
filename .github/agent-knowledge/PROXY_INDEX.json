@@ -1,0 +1,53 @@
+{
+  "schema": "1.0.0",
+  "scope": "mcp1.0.0 Bedrock/Azure/OpenRouter proxy",
+  "lastVerified": "2026-08-15",
+  "purpose": "Curated entry point for agents working on this repository",
+  "readOrder": [
+    "PROXY_INDEX.json",
+    "proxy-runtime.json",
+    "the source files cited by the selected record"
+  ],
+  "records": {
+    "runtime": {
+      "file": "proxy-runtime.json",
+      "useWhen": [
+        "changing model routing",
+        "debugging ports or startup",
+        "changing OpenHands or VS Code integration",
+        "changing Telegram, sound, or memory behavior"
+      ]
+    }
+  },
+  "writePolicy": {
+    "allowed": [
+      "facts verified from source plus an executable check",
+      "stable architecture decisions with file provenance",
+      "known operational commands that were successfully executed"
+    ],
+    "forbidden": [
+      "API keys, tokens, passwords, or personal data",
+      "full prompts or model responses",
+      "speculation presented as fact",
+      "temporary PIDs, timestamps, or transient failures"
+    ],
+    "requiredFields": [
+      "fact",
+      "evidence",
+      "verifiedAt"
+    ]
+  },
+  "legacyKnowledge": {
+    "pattern": "frontend-*.json",
+    "status": "out-of-scope artifacts copied from a different frontend/Mesh Platform repository",
+    "instruction": "Do not use these files as evidence for this proxy repository."
+  },
+  "graphiti": {
+    "status": "not integrated",
+    "futureBoundary": [
+      "search(query, repository, agent, limit)",
+      "remember(fact, provenance, repository, visibility)"
+    ],
+    "rule": "Graphiti and Neo4j must run as a separately managed service, never from proxy startup."
+  }
+}

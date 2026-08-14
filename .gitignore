@@ -2,10 +2,11 @@ node_modules
 dist
 .env
 
-# AI artifacts - ephemeral discoveries
-.ai/observe/
-.ai/explain/
-.ai/decide/
+# OS files
+.DS_Store
 
-# Keep persistent knowledge
-!.ai/decision-records/
+# Runtime output
+*.log
+
+# Archive (not tracked in git)
+archive/
