@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "build:notify": "npm run build",
+    "test:prompt-cache": "npm run build && node scripts/test-prompt-cache.js",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
     "dev:notify": "npm run dev"

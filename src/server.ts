@@ -9,6 +9,7 @@ import {
   forwardUserPrompt,
   type ChatForwardMetadata,
 } from './services/telegram-forwarder';
+import { installLanClipboardRoutes } from './services/lan-clipboard';
 
 // Route the Azure aliases configured by local AI clients.
 function shouldUseAzure(model: string | undefined): boolean {
@@ -40,6 +41,7 @@ async function forwardLiveStream(
 }
 
 const app = express();
+installLanClipboardRoutes(app);
 app.use(express.json({ limit: '10mb' }));
 
 // ── Request Traffic Logger (CRITICAL FOR DEBUGGING) ───────────────────────────
@@ -288,6 +290,8 @@ function responsesApiToChatCompletions(body: Record<string, unknown>): Record<st
     'tool_choice',
     'parallel_tool_calls',
     'response_format',
+    'prompt_cache_key',
+    'prompt_cache_options',
     'seed',
   ]);
 

@@ -4,6 +4,7 @@ import { logger } from './utils/logger';
 import { cacheStreamResponse, clearStreamCache, generateRequestId } from './utils/redis-cache';
 import { playChatCompletionSoundAsync } from './utils/sound-notification';
 import { speakSummary } from './utils/voice-summary';
+import { logPromptCacheUsage, toAnthropicInputUsage } from './utils/prompt-cache-usage';
 
 // ════════════════════════════════════════════════════════════════════════════
 // Mantle client config
@@ -157,7 +158,7 @@ function openAIResponseToAnthropic(json: Record<string, unknown>): Record<string
     stop_reason: OPENAI_TO_ANTHROPIC_STOP[choice?.['finish_reason'] as string] ?? 'end_turn',
     stop_sequence: null,
     usage: {
-      input_tokens: usage?.['prompt_tokens'] ?? 0,
+      ...toAnthropicInputUsage(usage),
       output_tokens: usage?.['completion_tokens'] ?? 0,
     },
   };
@@ -355,7 +356,9 @@ export async function invokeModel(body: Record<string, unknown>): Promise<Record
       throw new Error(`Mantle error ${res.status}: ${errText}`);
     }
 
-    return (await res.json()) as Record<string, unknown>;
+    const json = (await res.json()) as Record<string, unknown>;
+    logPromptCacheUsage(logger, 'mantle-anthropic', STATIC_MODEL_ID, json['usage']);
+    return json;
   }
 
   const payload = anthropicBodyToOpenAI(body);
@@ -371,7 +374,9 @@ export async function invokeModel(body: Record<string, unknown>): Promise<Record
     throw new Error(`Mantle error ${res.status}: ${errText}`);
   }
 
-  return openAIResponseToAnthropic((await res.json()) as Record<string, unknown>);
+  const json = (await res.json()) as Record<string, unknown>;
+  logPromptCacheUsage(logger, 'mantle-openai', STATIC_MODEL_ID, json['usage']);
+  return openAIResponseToAnthropic(json);
 }
 
 /** Streaming: for native anthropic.* Mantle models, pipe SSE bytes straight through unmodified.
@@ -516,9 +521,9 @@ export async function invokeModelOpenAI(body: Record<string, unknown>): Promise<
     throw new Error(`Mantle error ${res.status}: ${errText}`);
   }
 
-  const json = await res.json();
-  logger?.debug('Mantle OpenAI response', { json });
-  return json as Record<string, unknown>;
+  const json = (await res.json()) as Record<string, unknown>;
+  logPromptCacheUsage(logger, 'mantle-openai', STATIC_MODEL_ID, json['usage']);
+  return json;
 }
 
 /** Streaming: pipe Mantle's OpenAI-format SSE chunks straight through. */

@@ -3,6 +3,9 @@ import { STATIC_MODEL_ID } from './adapters';
 import { logger } from './utils/logger';
 import { cacheStreamResponse, clearStreamCache, generateRequestId } from './utils/redis-cache';
 import { playChatCompletionSoundAsync } from './utils/sound-notification';
+import { speakSummary } from './utils/voice-summary';
+import { logPromptCacheUsage, toAnthropicInputUsage } from './utils/prompt-cache-usage';
+import { withAzurePromptCacheKey } from './utils/azure-prompt-cache';
 
 // ════════════════════════════════════════════════════════════════════════════
 // Azure OpenAI Client Configuration
@@ -34,6 +37,23 @@ function openaiHeaders(): Record<string, string> {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${AZURE_OPENAI_API_KEY ?? ''}`,
   };
+}
+
+function normalizeAzurePayload(
+  body: Record<string, unknown>,
+  deployment: string,
+): Record<string, unknown> {
+  let payload = body;
+
+  if (deployment.toLowerCase().includes('-sol') && payload['max_tokens'] !== undefined) {
+    const { max_tokens: maxCompletionTokens, ...rest } = payload;
+    payload = {
+      ...rest,
+      max_completion_tokens: rest['max_completion_tokens'] ?? maxCompletionTokens,
+    };
+  }
+
+  return withAzurePromptCacheKey(payload, deployment);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -152,7 +172,7 @@ function openAIResponseToAnthropic(json: Record<string, unknown>): Record<string
     stop_reason: OPENAI_TO_ANTHROPIC_STOP[choice?.['finish_reason'] as string] ?? 'end_turn',
     stop_sequence: null,
     usage: {
-      input_tokens: usage?.['prompt_tokens'] ?? 0,
+      ...toAnthropicInputUsage(usage),
       output_tokens: usage?.['completion_tokens'] ?? 0,
     },
   };
@@ -363,13 +383,13 @@ function extractOpenAIDeltas(buffer: string, onText: (text: string) => void): st
 
 /** Non-streaming: Convert Anthropic request to OpenAI, call Azure, convert response back */
 export async function invokeModel(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const payload = anthropicBodyToOpenAI(body);
+  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
+  const payload = normalizeAzurePayload(anthropicBodyToOpenAI(body), deployment);
 
   const endpoint = AZURE_OPENAI_ENDPOINT?.replace(/\/$/, '');
   if (!endpoint) {
     throw new Error('AZURE_OPENAI_ENDPOINT is not configured');
   }
-  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
   const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`;
 
   const res = await fetchAzureWithRetry(url, {
@@ -379,7 +399,9 @@ export async function invokeModel(body: Record<string, unknown>): Promise<Record
   }, 'Azure error');
 
   const result = openAIResponseToAnthropic((await res.json()) as Record<string, unknown>);
+  logPromptCacheUsage(logger, 'azure-openai', String(payload['model'] ?? deployment), result['usage']);
   playChatCompletionSoundAsync();
+  speakSummaryAsync(anthropicResponseText(result));
   return result;
 }
 
@@ -390,13 +412,13 @@ export async function invokeModelStream(
   onTextDelta?: (text: string) => void,
 ): Promise<string[]> {
   const requestId = generateRequestId();
-  const payload = anthropicBodyToOpenAI({ ...body, stream: true });
+  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
+  const payload = normalizeAzurePayload(anthropicBodyToOpenAI({ ...body, stream: true }), deployment);
 
   const endpoint = AZURE_OPENAI_ENDPOINT?.replace(/\/$/, '');
   if (!endpoint) {
     throw new Error('AZURE_OPENAI_ENDPOINT is not configured');
   }
-  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
   const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`;
 
   const upstream = await fetchAzureWithRetry(url, {
@@ -422,9 +444,9 @@ export async function invokeModelStream(
 export async function invokeModelOpenAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const endpoint = AZURE_OPENAI_ENDPOINT?.replace(/\/$/, '');
   const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
-  const apiVersion = AZURE_OPENAI_API_VERSION;
+  const payload = normalizeAzurePayload(body, deployment);
 
-  const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+  const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`;
 
   if (!AZURE_OPENAI_ENDPOINT) {
     throw new Error('AZURE_OPENAI_ENDPOINT is not configured');
@@ -433,11 +455,13 @@ export async function invokeModelOpenAI(body: Record<string, unknown>): Promise<
   const res = await fetchAzureWithRetry(url, {
     method: 'POST',
     headers: azureHeaders(),
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   }, 'Azure error');
 
   const result = (await res.json()) as Record<string, unknown>;
+  logPromptCacheUsage(logger, 'azure-openai', String(payload['model'] ?? deployment), result['usage']);
   playChatCompletionSoundAsync();
+  speakSummaryAsync(openAIResponseText(result));
   return result;
 }
 
@@ -448,20 +472,19 @@ export async function invokeModelStreamOpenAI(
   onTextDelta?: (text: string) => void,
 ): Promise<string[]> {
   const requestId = generateRequestId();
-  const endpoint = AZURE_OPENAI_ENDPOINT?.replace(/\/$/, '');
   const deployment = process.env.AZURE_OPENAI_DEPLOYMENT || 'gpt-4.1-deployment';
-  const apiVersion = AZURE_OPENAI_API_VERSION;
+  const payload = normalizeAzurePayload({ ...body, stream: true }, deployment);
 
-  const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
-
-  if (!AZURE_OPENAI_ENDPOINT) {
+  const endpoint = AZURE_OPENAI_ENDPOINT?.replace(/\/$/, '');
+  if (!endpoint) {
     throw new Error('AZURE_OPENAI_ENDPOINT is not configured');
   }
+  const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${AZURE_OPENAI_API_VERSION}`;
 
   const upstream = await fetchAzureWithRetry(url, {
     method: 'POST',
     headers: azureHeaders(),
-    body: JSON.stringify({ ...body, stream: true }),
+    body: JSON.stringify(payload),
   }, 'Azure stream error');
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -488,5 +511,29 @@ export async function invokeModelStreamOpenAI(
 
   res.end();
   playChatCompletionSoundAsync();
+  speakSummaryAsync(responseText.join(''));
   return responseText;
+}
+
+function speakSummaryAsync(text: string): void {
+  if (text.trim()) void speakSummary(text);
+}
+
+function anthropicResponseText(result: Record<string, unknown>): string {
+  const content = result['content'];
+  if (!Array.isArray(content)) return '';
+
+  return (content as Record<string, unknown>[])
+    .filter((block) => block['type'] === 'text' && typeof block['text'] === 'string')
+    .map((block) => String(block['text']))
+    .join(' ');
+}
+
+function openAIResponseText(result: Record<string, unknown>): string {
+  const choices = result['choices'];
+  if (!Array.isArray(choices)) return '';
+  const message = (choices[0] as Record<string, unknown> | undefined)?.['message'];
+  if (!message || typeof message !== 'object') return '';
+  const content = (message as Record<string, unknown>)['content'];
+  return typeof content === 'string' ? content : '';
 }

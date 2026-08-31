@@ -11,7 +11,6 @@ const CLAUDE_PATH = process.env.CLAUDE_CODE_PATH ?? path.join(os.homedir(), '.lo
 const AGENT_MODEL = process.env.TELEGRAM_AGENT_MODEL ?? 'zai.glm-5';
 const AGENT_TIMEOUT_MS = 5 * 60 * 1000;
 const OUTPUT_LIMIT_BYTES = 64 * 1024;
-const TELEGRAM_RESULT_LIMIT = 3500;
 
 export interface WorkspaceCheck {
   executable: string;
@@ -49,10 +48,8 @@ export interface PendingWork {
   expiresAt: number;
 }
 
-function boundedText(text: string): string {
-  const safe = redactSensitiveText(text.trim() || 'No response was produced.');
-  if (safe.length <= TELEGRAM_RESULT_LIMIT) return safe;
-  return `${safe.slice(0, TELEGRAM_RESULT_LIMIT)}\n\n[Output truncated]`;
+function safeOutputText(text: string): string {
+  return redactSensitiveText(text.trim() || 'No response was produced.');
 }
 
 async function runProcess(
@@ -99,7 +96,7 @@ async function runProcess(
         return;
       }
       if (code !== 0) {
-        reject(new Error(boundedText(stderr || stdout || `Process exited with code ${code ?? 'unknown'}`)));
+        reject(new Error(safeOutputText(stderr || stdout || `Process exited with code ${code ?? 'unknown'}`)));
         return;
       }
       resolve({ stdout, stderr });
@@ -213,7 +210,7 @@ export async function runWorkspaceAgent(
       ANTHROPIC_API_KEY: 'dummy',
     },
   );
-  return boundedText(result.stdout || result.stderr);
+  return safeOutputText(result.stdout || result.stderr);
 }
 
 export async function runWorkspaceCheck(workspace: WorkspaceBinding, checkName: string): Promise<string> {
@@ -227,7 +224,7 @@ export async function runWorkspaceCheck(workspace: WorkspaceBinding, checkName: 
     workspace.root,
     { HOME: os.homedir(), PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin', LANG: 'en_US.UTF-8' },
   );
-  return boundedText(result.stdout || result.stderr || `${checkName} passed.`);
+  return safeOutputText(result.stdout || result.stderr || `${checkName} passed.`);
 }
 
 export function createPendingWork(

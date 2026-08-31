@@ -7,6 +7,8 @@
 
 import { Response } from 'express';
 import { playChatCompletionSoundAsync } from './utils/sound-notification';
+import { logger } from './utils/logger';
+import { logPromptCacheUsage, toAnthropicInputUsage } from './utils/prompt-cache-usage';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -197,8 +199,8 @@ export async function invokeOpenRouter(
     const errorText = await response.text();
     throw new Error(`OpenRouter API error ${response.status}: ${errorText}`);
   }
-
   const data = await response.json() as any;
+  logPromptCacheUsage(logger, 'openrouter', model, data.usage);
   playChatCompletionSoundAsync();
 
   return {
@@ -307,7 +309,10 @@ export async function invokeOpenRouterAnthropic(
     model,
     stop_reason: choice?.finish_reason === 'tool_calls' ? 'tool_use' : choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
     stop_sequence: null,
-    usage: { input_tokens: usage?.prompt_tokens || 0, output_tokens: usage?.completion_tokens || 0 },
+    usage: {
+      ...toAnthropicInputUsage(usage),
+      output_tokens: usage?.completion_tokens || 0,
+    },
   };
 }
 

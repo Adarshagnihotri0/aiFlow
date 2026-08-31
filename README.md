@@ -184,6 +184,26 @@ Both ports expose identical endpoints:
 | `/v1/messages` | POST | Anthropic-compatible messages |
 | `/ready` | GET | Readiness probe |
 | `/alive` | GET | Liveness probe |
+| `/clipboard` | GET | Phone-friendly LAN clipboard page (macOS only) |
+| `/v1/clipboard/text` | GET | Authenticated Mac-to-phone clipboard text |
+| `/v1/clipboard/text` | POST | Authenticated phone-to-Mac clipboard text |
+| `/v1/clipboard/file` | POST | Authenticated image/file-to-Mac clipboard transfer |
+
+## LAN Clipboard
+
+On a phone connected to the same trusted Wi-Fi network, open `http://<mac-lan-ip>:2999/clipboard`. The token can be entered manually from `~/.copilot/lan-clipboard/token`, or copied into a direct pairing link on the Mac without printing it:
+
+```bash
+lan_ip=$(ipconfig getifaddr en0 || ipconfig getifaddr en1) && printf 'http://%s:2999/clipboard#token=%s' "$lan_ip" "$(tr -d '\r\n' < ~/.copilot/lan-clipboard/token)" | pbcopy
+```
+
+Send that copied link privately to the phone and open it once. The page stores the token for the tab session, removes it from the address bar immediately, and loads the Mac clipboard. It can then refresh and display current Mac text, copy that text on the phone, and send phone text back to the Mac.
+
+For an Android screenshot, tap **Choose recent screenshot**, select the newest image from Android's recent-image picker, and it uploads immediately. Browser security prevents a web page from silently reading the Screenshots folder, so the selection tap is required. General files use the adjacent picker. PNG/JPEG uploads become native Mac image clipboard data, other uploads become Finder-compatible file references, transfers are limited to 25 MB, and staged files expire after 24 hours.
+
+Refreshing the page preserves the token, outgoing text draft, and last received Mac text for the current tab session. Browsers intentionally clear file-input selections on refresh; selected images and files are uploaded immediately so that restriction does not interrupt a transfer.
+
+The bridge uses authenticated plain HTTP so the existing port-2999 AI clients remain compatible. Use it only on a trusted private LAN; do not expose port 2999 through router forwarding, public Wi-Fi, or an Internet-facing reverse proxy. Session data is discarded when the tab is closed, and Mac clipboard responses are marked `no-store`.
 
 ## Environment Variables
 

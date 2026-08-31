@@ -12,6 +12,7 @@ function speakWithMacOS(text: string): void {
 
 // Initialize ElevenLabs client
 let elevenlabs: ElevenLabsClient | null = null;
+let elevenLabsFailureReported = false;
 if (process.env.ELEVENLABS_API_KEY) {
   elevenlabs = new ElevenLabsClient({
     apiKey: process.env.ELEVENLABS_API_KEY,
@@ -24,7 +25,16 @@ if (process.env.ELEVENLABS_API_KEY) {
 }
 
 // Voice ID for text-to-speech (Rachel voice)
-const VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb';
+const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb';
+
+function useMacOSFallback(text: string): void {
+  elevenlabs = null;
+  if (!elevenLabsFailureReported) {
+    console.warn('[ElevenLabs] TTS unavailable; using macOS voice fallback.');
+    elevenLabsFailureReported = true;
+  }
+  speakWithMacOS(text);
+}
 
 /**
  * Speak the first 1-2 sentences of the actual response as the summary using ElevenLabs
@@ -59,9 +69,7 @@ export async function speakSummary(responseText: string, toolCalls: number = 0):
     if (process.env.DEBUG_VOICE) {
       console.error('[ElevenLabs] Failed to speak:', error);
     }
-
-    // Fallback to macOS 'say' command on failure
-    speakWithMacOS(summary);
+    useMacOSFallback(summary);
   }
 }
 
@@ -121,8 +129,6 @@ export async function speakCompletion(responseText: string): Promise<void> {
     if (process.env.DEBUG_VOICE) {
       console.error('[ElevenLabs] Failed to speak:', error);
     }
-
-    // Fallback to macOS 'say' command on failure
-    speakWithMacOS(message);
+    useMacOSFallback(message);
   }
 }

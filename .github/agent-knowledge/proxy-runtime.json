@@ -61,6 +61,19 @@
       ]
     },
     {
+      "id": "voice-completion",
+      "fact": "Azure Anthropic-compatible and native OpenAI sync/stream completions speak a short summary when the final response contains text. Speech is non-blocking. ElevenLabs uses ELEVENLABS_VOICE_ID when configured and permanently falls back to macOS say after the first TTS failure in a process, while the Glass completion sound remains independent.",
+      "evidence": [
+        "src/azure-client.ts",
+        "src/utils/voice-summary.ts",
+        "src/utils/sound-notification.ts",
+        "npm run build",
+        "live gpt-5.6-sol completion through port 2999",
+        "macOS say fallback command",
+        "/tmp/bedrock-proxy.log and /tmp/bedrock-proxy-error.log voice events"
+      ]
+    },
+    {
       "id": "telegram-inbound",
       "fact": "The port-2999 LaunchAgent enables topic-aware inbound Telegram polling. /ask invokes the default GLM-5 model. Owner-only project control uses /work for a read-only plan and a 10-minute single-use /confirm token before Claude Code may edit files in the same privately mapped workspace; /cancel invalidates pending work. /check runs only administrator-provisioned executables and arguments with shell disabled. Arbitrary shell access is not exposed. Conversation and confirmation state are held only in memory and reset by a proxy restart.",
       "evidence": [
@@ -75,6 +88,22 @@
         "ai2 status",
         "Telegram getMyCommands returned all nine commands",
         "Telegram group creator authorization check passed"
+      ]
+    },
+    {
+      "id": "prompt-cache-observability",
+      "fact": "Successful non-streaming Mantle, Azure, and OpenRouter responses emit structured provider prompt-cache metrics without prompt or response content. OpenAI, Responses API, Anthropic, Bedrock, DeepSeek, and GPT-5.6 cache-write usage shapes are normalized; OpenAI-to-Anthropic conversions preserve cache counters without double-counting input tokens. Azure SOL requests receive a deterministic prompt_cache_key derived only from stable leading system/developer messages and tool schemas unless the client supplies a key. A fresh-prefix benchmark on port 2999 reported one 8,413-token cache write followed by two 8,413-token cache reads out of 8,416 input tokens (99.96% hit rate), with identical checked output. Prompt caching lowers billed input computation but does not reduce prompt_tokens sent. Missing provider cache fields are reported as unavailable rather than inferred from latency.",
+      "evidence": [
+        "src/utils/prompt-cache-usage.ts",
+        "src/utils/azure-prompt-cache.ts",
+        "src/bedrock.ts",
+        "src/azure-client.ts",
+        "src/openrouter-client.ts",
+        "src/server.ts",
+        "npm run test:prompt-cache",
+        "three identical live Azure gpt-5.6-sol fresh-prefix requests through com.adarsh.bedrock-proxy on port 2999",
+        "/tmp/bedrock-proxy.log structured Provider prompt cache usage entries",
+        "curl http://localhost:2999/health"
       ]
     },
     {
