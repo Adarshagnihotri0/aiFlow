@@ -1,0 +1,28 @@
+{
+  "id": "fieldnotes-foundation",
+  "title": "Build a tutor beside a running service—not inside it",
+  "date": "2026-09-16T05:20:00.000Z",
+  "status": "incomplete",
+  "summary": "The agent built Fieldnotes as a separate learning portal. Six starter lessons, source-linked tutoring, recall cards, session imports and interview prompts are implemented. Automated checks passed; live model answers and human phone acceptance are not yet verified.",
+  "why": "The user needed beginner explanations and memory practice without interrupting the active model proxy. Keeping notebook state and the website in a separate process avoids restarting the coding service and gives learning its own failure boundary.",
+  "changes": [
+    "Added an independent Node service on loopback port 3210; the running model proxy on 2999 was not restarted.",
+    "Added Today, Learn, Sessions, Ask, Practice and Career views with explicit external-AI consent.",
+    "Bounded tutoring to one admitted request at a time, tested overlapping requests, and aligned browser/API limits.",
+    "Added durable review scheduling, curated recap import and immutable linked corrections. Future coding sessions still require deliberate recap publication."
+  ],
+  "concepts": ["Service boundaries", "HTTP", "Concurrency", "Evidence", "Spaced recall"],
+  "exercise": "On paper, draw browser → portal → proxy → provider. Mark where progress is stored and what may leave the Mac. Then explain why a green unit test does not establish phone usability or answer accuracy.",
+  "sourceIds": ["proxy-boundaries", "proxy-routing", "hopper-contracts"],
+  "evidence": [
+    {"label": "Portal regression suite", "state": "verified", "reference": "npm test: 23 passed, 0 failed. Checks include auth, replay, concurrency, source recovery and post-rename storage failure. Provider responses were mocked."},
+    {"label": "Proxy continuity", "state": "verified", "reference": "Before and after implementation, the listener had the same process identity and GET /health returned HTTP 200. No proxy lifecycle action was performed."},
+    {"label": "Human phone acceptance and live AI", "state": "not-run", "reference": "A human must accept the mobile experience. Live tutoring requires informed consent; mocked provider tests do not prove live answers or provider availability."}
+  ],
+  "teaching": {
+    "plainExplanation": "A process is a running program. A port is an address where a program receives network requests. A sidecar here means a separate helper program: the website can fail or restart without deliberately stopping the model proxy. A contract describes behaviour we can check, such as allowing at most one chatbot request at once.",
+    "example": "Imagine two questions arrive together. If the portal first checks whether it is busy, waits to read files, and only then marks itself busy, both questions can slip through. Reserve the slot before waiting. Release it in finally so success and failure both free the slot. A test sends overlapping requests and counts provider calls; one call is the expected result.",
+    "checkQuestion": "Why use a separate portal, what prevents overlapping chatbot calls, and what do the current tests not prove?",
+    "checkAnswer": "The separate portal owns learning state without restarting the proxy. It reserves its busy slot before the first asynchronous wait and releases it in finally. The tests check specified behaviours with a mocked provider, not real model availability, factual answers, or human phone usability."
+  }
+}

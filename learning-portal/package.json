@@ -1,0 +1,24 @@
+{
+  "name": "fieldnotes-learning-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An independent, read-only learning companion for MCP 1.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:browser": "playwright test",
+    "session:publish": "node scripts/publish-session.js",
+    "github:restore": "node scripts/restore-github.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

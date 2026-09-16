@@ -1,0 +1,410 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import http from 'node:http';
+import { createApp } from '../server/app.js';
+import { createStore } from '../server/store.js';
+import { createInbox, sessionLesson } from '../server/sessions.js';
+import { profileDefault, validateSession } from '../server/schema.js';
+import { sourceIds } from '../server/catalog.js';
+
+const recap = { id: 'first-session', title: 'A recorded change', date: '2026-09-16T00:00:00.000Z', status: 'incomplete', summary: 'The agent introduced a route boundary.', why: 'The recorded reason was to separate UI coordination from persistence.', changes: ['Added a separate owner.'], concepts: ['Ownership'], exercise: 'Draw the responsibilities and identify a test.', sourceIds: ['hopper-contracts'], evidence: [{ label: 'Behaviour test', state: 'not-run', reference: 'No runtime result recorded.' }] };
+
+async function fixture(t, options = {}) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'fieldnotes-api-'));
+  await mkdir(path.join(dir, 'hopper'), { recursive: true });
+  await writeFile(path.join(dir, 'hopper/AGENTS.md'), 'Routes coordinate state. Repositories own data consistency.');
+  const store = await createStore(path.join(dir, 'data'));
+  const app = createApp({ store, roots: { hopper: path.join(dir, 'hopper'), proxy: path.join(dir, 'proxy') }, publicDirectory: path.join(dir, 'public'), publicOrigin: 'https://notebook.example', localAuthority: '127.0.0.1:3210', ...options });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); await rm(dir, { recursive: true, force: true }); });
+  let cookie = '';
+  async function call(route, { method = 'GET', body, remote = false, auth = true, headers = {} } = {}) {
+    // Node fetch rewrites Host. Use http.request to exercise the real host boundary.
+    const response = await new Promise((resolve, reject) => {
+      const request = http.request(`http://127.0.0.1:${server.address().port}${route}`, {
+        method, headers: { Host: remote ? 'notebook.example' : '127.0.0.1:3210', ...(auth && cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json', Origin: remote ? 'https://notebook.example' : 'http://127.0.0.1:3210' } : {}), ...headers },
+      }, (incoming) => {
+        const chunks = []; incoming.on('data', (chunk) => chunks.push(chunk));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, headers: new Headers(Object.entries(incoming.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value])), json: async () => JSON.parse(Buffer.concat(chunks).toString()) }));
+      });
+      request.on('error', reject); request.end(body === undefined ? undefined : JSON.stringify(body));
+    });
+    const set = response.headers.get('set-cookie'); if (set) cookie = set.split(';')[0];
+    return { status: response.status, body: await response.json(), headers: response.headers };
+  }
+  return { dir, store, call };
+}
+test('private data requires pairing remotely; local bootstrap grants only direct loopback', async (t) => {
+  const { call } = await fixture(t);
+  assert.equal((await call('/api/bootstrap', { remote: true, auth: false })).status, 401);
+  assert.equal((await call('/api/bootstrap', { headers: { 'x-forwarded-for': '1.2.3.4' }, auth: false })).status, 401);
+  assert.equal((await call('/api/bootstrap', { headers: { Host: 'evil.example' }, auth: false })).status, 403);
+  assert.equal((await call('/api/bootstrap', { headers: { 'Sec-Fetch-Site': 'cross-site' }, auth: false })).status, 403);
+  const result = await call('/api/bootstrap');
+  assert.equal(result.status, 200); assert.equal(result.body.local, true);
+  assert.equal(result.headers.get('cache-control'), 'no-store');
+  assert.match(result.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
+  assert.equal((await call('/api/source/not-allowed')).status, 404);
+});
+test('pairing expires, is single use, cannot be generated remotely and logout revokes cookie', async (t) => {
+  let clock = Date.now(); const { call } = await fixture(t, { now: () => clock });
+  await call('/api/bootstrap');
+  const first = await call('/api/pair', { method: 'POST', body: {} });
+  clock += 300001;
+  assert.equal((await call('/api/login', { remote: true, method: 'POST', body: { code: first.body.code } })).status, 401);
+  const second = await call('/api/pair', { method: 'POST', body: {} });
+  const login = await call('/api/login', { remote: true, method: 'POST', body: { code: second.body.code } });
+  assert.equal(login.status, 200); assert.match(login.headers.get('set-cookie'), /Secure/);
+  assert.equal((await call('/api/login', { remote: true, method: 'POST', body: { code: second.body.code } })).status, 401);
+  assert.equal((await call('/api/pair', { remote: true, method: 'POST', body: {} })).status, 403);
+  await call('/api/logout', { remote: true, method: 'POST', body: {} });
+  assert.equal((await call('/api/bootstrap', { remote: true })).status, 401);
+});
+test('CSRF and invalid profile requests do not mutate progress', async (t) => {
+  const { call, store } = await fixture(t); await call('/api/bootstrap');
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, minutes: -1 } })).status, 400);
+  assert.equal((await call('/api/profile', { method: 'PUT', body: profileDefault, headers: { Origin: 'https://evil.example' } })).status, 403);
+  assert.deepEqual(store.snapshot().profile, profileDefault);
+});
+
+test('GitHub status is authenticated only and never part of public health', async (t) => {
+  const value = { configured: true, state: 'synced', repo: 'Example/Private', branch: 'main', lastSyncedAt: 100, message: 'Saved' };
+  const { call } = await fixture(t, { github: { status: () => value } });
+  assert.equal((await call('/api/github', { remote: true, auth: false })).status, 401);
+  assert.ok(!JSON.stringify((await call('/health', { remote: true, auth: false })).body).includes('Private'));
+  assert.deepEqual((await call('/api/bootstrap')).body.github, value);
+  assert.deepEqual((await call('/api/github')).body, value);
+});
+
+test('focused presentation is optional, validated, and never implies AI consent', async (t) => {
+  const { call, store } = await fixture(t);
+  await call('/api/bootstrap');
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, learningStyle: 'focused' } })).status, 200);
+  assert.equal(store.snapshot().profile.learningStyle, 'focused');
+  assert.equal(store.snapshot().profile.aiConsent, false);
+  assert.equal((await call('/api/chat', { method: 'POST', body: { question: 'Explain ownership', mode: 'teach' } })).status, 403);
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, learningStyle: 'diagnosis' } })).status, 400);
+});
+test('two clients cannot restore withdrawn consent by saving a captured stale settings body', async (t) => {
+  let providerCalls = 0;
+  const { call, store, dir } = await fixture(t, { fetchImpl: async () => { providerCalls++; throw new Error('No provider call is permitted.'); } });
+  const first = await call('/api/bootstrap', { auth: false });
+  const clientA = { Cookie: first.headers.get('set-cookie').split(';')[0] };
+  assert.equal((await call('/api/profile', { method: 'PUT', headers: clientA, body: { ...first.body.profile, aiConsent: true, expectedAiConsent: false } })).status, 200);
+  const oldProfile = (await call('/api/bootstrap', { headers: clientA })).body.profile;
+  assert.equal(oldProfile.aiConsent, true);
+  const staleSettingsBody = { ...oldProfile, learningStyle: 'focused', expectedAiConsent: oldProfile.aiConsent };
+
+  const second = await call('/api/bootstrap', { auth: false });
+  const clientB = { Cookie: second.headers.get('set-cookie').split(';')[0] };
+  assert.notEqual(clientA.Cookie, clientB.Cookie);
+  assert.equal((await call('/api/profile', { method: 'PUT', headers: clientB, body: { ...second.body.profile, aiConsent: false, expectedAiConsent: true } })).status, 200);
+  const withdrawn = store.snapshot().profile;
+  assert.equal(withdrawn.aiConsent, false);
+
+  const staleSave = await call('/api/profile', { method: 'PUT', headers: clientA, body: staleSettingsBody });
+  assert.equal(staleSave.status, 409);
+  assert.match(staleSave.body.error, /Preferences were not saved/);
+  assert.deepEqual(store.snapshot().profile, withdrawn);
+  assert.deepEqual((await call('/api/bootstrap', { headers: clientA })).body.profile, withdrawn);
+  // A legacy client with no expected snapshot must not restore consent either.
+  assert.equal((await call('/api/profile', { method: 'PUT', headers: clientA, body: { ...oldProfile, learningStyle: 'focused' } })).status, 409);
+  assert.deepEqual(store.snapshot().profile, withdrawn);
+  assert.equal((await call('/api/chat', { method: 'POST', headers: clientA, body: { question: 'Explain ownership', mode: 'teach' } })).status, 403);
+  assert.equal(providerCalls, 0);
+
+  // Keeping the preference draft and explicitly unchecking consent is safe even
+  // with the original expected=true snapshot. No automatic enable or partial save.
+  assert.equal((await call('/api/profile', { method: 'PUT', headers: clientA, body: { ...staleSettingsBody, aiConsent: false } })).status, 200);
+  const focused = { ...withdrawn, learningStyle: 'focused' };
+  assert.deepEqual(store.snapshot().profile, focused);
+  assert.deepEqual((await call('/api/bootstrap', { headers: clientB })).body.profile, focused);
+  assert.deepEqual((await createStore(path.join(dir, 'data'))).snapshot().profile, focused);
+});
+
+test('enabling requires an explicit false snapshot; valid withdrawals never require a matching snapshot', async (t) => {
+  const { call, store } = await fixture(t);
+  await call('/api/bootstrap');
+  for (const expected of [{}, { expectedAiConsent: true }]) {
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, ...expected } })).status, 409);
+    assert.deepEqual(store.snapshot().profile, profileDefault);
+  }
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: 'false' } })).status, 400);
+  for (const expected of [{}, { expectedAiConsent: false }, { expectedAiConsent: true }]) {
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } })).status, 200);
+    assert.deepEqual(store.snapshot().profile, { ...profileDefault, aiConsent: true });
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, learningStyle: 'focused', aiConsent: true, expectedAiConsent: true } })).status, 200);
+    assert.deepEqual(store.snapshot().profile, { ...profileDefault, learningStyle: 'focused', aiConsent: true });
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, ...expected } })).status, 200);
+    assert.deepEqual(store.snapshot().profile, profileDefault);
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, ...expected } })).status, 200);
+    assert.deepEqual((await call('/api/bootstrap')).body.profile, profileDefault);
+  }
+});
+
+test('focused live chat request uses literal presentation instructions without diagnosis assumptions (mock provider only)', async (t) => {
+  const requests = [];
+  const { call, store } = await fixture(t, { fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'Mock source-assisted explanation [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  const profile = { ...profileDefault, learningStyle: 'focused', aiConsent: true };
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profile, expectedAiConsent: false } })).status, 200);
+  const result = await call('/api/chat', { method: 'POST', body: { question: 'Explain route ownership', mode: 'teach', lessonId: 'state-and-routes' } });
+  assert.equal(result.status, 200);
+  assert.equal(requests.length, 1);
+  const system = requests[0].messages[0];
+  assert.equal(system.role, 'system');
+  assert.match(system.content, /Presentation preference: focused\./);
+  assert.match(system.content, /Use literal, precise wording; define each new term before using it/);
+  assert.match(system.content, /This is a presentation preference, not a diagnosis or an inference about ability/);
+  assert.match(system.content, /Separate observed facts, recorded decisions and assumptions/);
+  assert.match(system.content, /Avoid time pressure and claims of mastery/);
+  assert.doesNotMatch(system.content, /\b(?:autis\w*|ADHD|neurodiver\w*)\b/i);
+  assert.deepEqual(store.snapshot().profile, profile);
+});
+
+test('concurrent duplicate reviews apply once; changed payloads conflict; sources invalidate schedule', async (t) => {
+  const { call, store, dir } = await fixture(t); await call('/api/bootstrap');
+  const body = { cardId: 'contracts-and-tests', rating: 'good', requestId: randomUUID() };
+  const responses = await Promise.all([call('/api/review', { method: 'POST', body }), call('/api/review', { method: 'POST', body })]);
+  assert.ok(responses.every((result) => result.status === 200));
+  assert.deepEqual(responses[0].body, responses[1].body);
+  assert.equal(store.snapshot().reviews[body.cardId].reps, 1);
+  assert.equal((await call('/api/review', { method: 'POST', body: { ...body, rating: 'easy' } })).status, 409);
+  await writeFile(path.join(dir, 'hopper/AGENTS.md'), 'Updated contract.');
+  assert.equal((await call('/api/bootstrap')).body.reviews[body.cardId].due, 0);
+});
+test('chat is consent-gated, source-assisted, bounded, redacted and not persisted', async (t) => {
+  const requests = [];
+  const { call, store } = await fixture(t, { fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'A route coordinates UI state [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  const body = { question: 'Explain route ownership', mode: 'teach', lessonId: 'state-and-routes', history: [] };
+  assert.equal((await call('/api/chat', { method: 'POST', body })).status, 403); assert.equal(requests.length, 0);
+  await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } });
+  assert.equal((await call('/api/chat', { method: 'POST', body: { ...body, question: 'password=supersecret' } })).status, 400);
+  const result = await call('/api/chat', { method: 'POST', body });
+  assert.equal(result.status, 200); assert.equal(result.body.grounding, 'source-assisted');
+  assert.equal(result.body.sources[0].id, 'hopper-contracts');
+  assert.match(requests[0].messages[0].content, /UNTRUSTED DATA/);
+  assert.ok(!JSON.stringify(store.snapshot()).includes('Explain route ownership'));
+  assert.equal((await call('/api/chat', { method: 'POST', body })).status, 429);
+});
+test('provider errors are sanitized and capacity is released without retry', async (t) => {
+  let clock = Date.now(); let calls = 0;
+  const { call } = await fixture(t, { now: () => clock, fetchImpl: async () => { calls++; return new Response('secret upstream diagnostic', { status: 500 }); } });
+  await call('/api/bootstrap'); await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } });
+  const body = { question: 'Explain a contract', mode: 'teach' };
+  const result = await call('/api/chat', { method: 'POST', body }); assert.equal(result.status, 502);
+  assert.ok(!JSON.stringify(result.body).includes('secret')); assert.equal(calls, 1);
+  clock += 11000; await call('/api/chat', { method: 'POST', body }); assert.equal(calls, 2);
+});
+test('timeout aborts the tutor and reports uncertainty', async (t) => {
+  const { call } = await fixture(t, { requestTimeout: 20, fetchImpl: (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('abort')))) });
+  await call('/api/bootstrap'); await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } });
+  const result = await call('/api/chat', { method: 'POST', body: { question: 'Explain a contract', mode: 'teach' } });
+  assert.equal(result.status, 504); assert.match(result.body.error, /may still finish/);
+});
+test('curated inbox preserves producer evidence and rejects replay conflicts or sensitive content', async (t) => {
+  const { dir, store } = await fixture(t); const inboxPath = path.join(dir, 'inbox'); await mkdir(inboxPath);
+  const inbox = createInbox(store, inboxPath);
+  await writeFile(path.join(inboxPath, 'first-session.json'), JSON.stringify(recap));
+  assert.equal((await inbox.scan()).imported, 1); await inbox.scan(); assert.equal(store.snapshot().sessions.length, 1);
+  await writeFile(path.join(inboxPath, 'first-session.json'), JSON.stringify({ ...recap, summary: 'Conflicting rewrite.' }));
+  assert.equal((await inbox.scan()).rejected, 1); assert.equal(store.snapshot().sessions[0].summary, recap.summary);
+  assert.throws(() => validateSession({ ...recap, summary: 'password=supersecret' }, sourceIds));
+  assert.throws(() => validateSession({ ...recap, sourceIds: ['unknown-source'] }, sourceIds));
+  assert.match(sessionLesson(recap).sections.at(-1).body, /NOT-RUN/);
+});
+
+test('chat accepts exactly 2000 question characters and rejects 2001 without consuming provider capacity', async (t) => {
+  const requests = [];
+  const { call } = await fixture(t, { now: () => Date.UTC(2026, 8, 16), fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'A contract describes expected behaviour [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } })).status, 200);
+  const body = { question: 'q'.repeat(2000), mode: 'teach', history: [] };
+  assert.equal((await call('/api/chat', { method: 'POST', body: { ...body, question: `${body.question}q` } })).status, 400);
+  assert.equal(requests.length, 0);
+  assert.equal((await call('/api/chat', { method: 'POST', body })).status, 200);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].messages.at(-1), { role: 'user', content: body.question });
+});
+
+test('64-character session IDs remain distinct lesson and progress IDs while 65-character IDs are rejected', async (t) => {
+  const prefix = 's'.repeat(63);
+  const first = { ...recap, id: `${prefix}a` };
+  const second = { ...recap, id: `${prefix}b`, title: 'A different recorded change' };
+  for (const session of [first, second]) {
+    assert.equal(session.id.length, 64);
+    assert.equal(validateSession(session, sourceIds).id, session.id);
+  }
+  assert.throws(() => validateSession({ ...first, id: `${first.id}a` }, sourceIds));
+  assert.equal(validateSession({ ...second, supersedes: first.id }, sourceIds).supersedes, first.id);
+  assert.throws(() => validateSession({ ...second, supersedes: `${first.id}a` }, sourceIds));
+  assert.equal(sessionLesson(first).id, `session-${first.id}`);
+  assert.equal(sessionLesson(second).id, `session-${second.id}`);
+  assert.notEqual(sessionLesson(first).id, sessionLesson(second).id);
+
+  const { dir, store, call } = await fixture(t);
+  const inboxPath = path.join(dir, 'inbox'); await mkdir(inboxPath);
+  const inbox = createInbox(store, inboxPath);
+  for (const session of [first, second]) await writeFile(path.join(inboxPath, `${session.id}.json`), JSON.stringify(session));
+  const scan = await inbox.scan();
+  assert.equal(scan.imported, 2); assert.equal(scan.rejected, 0);
+  const bootstrap = await call('/api/bootstrap');
+  assert.equal(bootstrap.status, 200);
+  const imported = bootstrap.body.lessons.filter((lesson) => lesson.id.startsWith('session-'));
+  assert.deepEqual(imported.map((lesson) => lesson.id), [`session-${first.id}`, `session-${second.id}`]);
+  assert.equal((await call('/api/progress', { method: 'POST', body: { lessonId: imported[0].id, step: 'read' } })).status, 200);
+  assert.equal((await call('/api/progress', { method: 'POST', body: { lessonId: imported[1].id, step: 'attempted' } })).status, 200);
+  assert.deepEqual(store.snapshot().progress, { [imported[0].id]: { read: true }, [imported[1].id]: { attempted: true } });
+});
+
+test('session recall answers include actual evidence and status with or without supplied teaching', () => {
+  const evidence = [
+    { label: 'Ownership review', state: 'reported', reference: 'Review notes record a repository boundary.' },
+    { label: 'Duplicate request check', state: 'verified', reference: 'Two attempts produced one stored entry.' },
+    { label: 'Offline recovery check', state: 'failed', reference: 'The offline retry still lost the pending operation.' },
+    { label: 'Device lifecycle check', state: 'not-run', reference: 'No device was available for recreation testing.' },
+  ];
+  const teaching = { plainExplanation: 'Give each operation one owner.', example: 'A route delegates saving to a repository.', checkQuestion: 'Who owns the saved data?', checkAnswer: 'The repository owns persisted data consistency.' };
+  for (const status of ['complete', 'incomplete']) {
+    for (const supplied of [undefined, teaching]) {
+      const session = { ...recap, status, evidence, ...(supplied ? { teaching: supplied } : {}) };
+      const answer = sessionLesson(session).answer;
+      assert.ok(answer.includes(supplied ? supplied.checkAnswer : session.summary));
+      assert.ok(answer.includes(session.why));
+      assert.ok(answer.includes(`Status: ${status}.`));
+      for (const item of evidence) assert.ok(answer.includes(`${item.state}: ${item.label} — ${item.reference}`));
+      assert.match(answer, /not independent certification/);
+    }
+  }
+});
+
+test('linked immutable session imports replace active lessons but retain the complete supersededBy history', async (t) => {
+  const { dir, store, call } = await fixture(t);
+  const inboxPath = path.join(dir, 'inbox'); await mkdir(inboxPath);
+  const inbox = createInbox(store, inboxPath);
+  const replacement = { ...recap, id: 'second-session', supersedes: recap.id, status: 'complete', summary: 'The recorded boundary now has a passing check.' };
+  const latest = { ...replacement, id: 'third-session', supersedes: replacement.id, summary: 'A later session records a lifecycle limitation.' };
+  const chain = [recap, replacement, latest];
+  for (let index = 0; index < chain.length; index++) {
+    const session = chain[index];
+    await writeFile(path.join(inboxPath, `${session.id}.json`), JSON.stringify(session));
+    const scan = await inbox.scan();
+    assert.equal(scan.imported, 1); assert.equal(scan.rejected, 0);
+    const bootstrap = await call('/api/bootstrap');
+    assert.equal(bootstrap.status, 200);
+    assert.deepEqual(bootstrap.body.lessons.filter((lesson) => lesson.id.startsWith('session-')).map((lesson) => lesson.id), [`session-${session.id}`]);
+    assert.deepEqual(bootstrap.body.sessions, chain.slice(0, index + 1).map((entry, historyIndex) => ({ ...entry, supersededBy: historyIndex < index ? chain[historyIndex + 1].id : null })));
+    // Supersession is an append, never a rewrite of an accepted producer record.
+    assert.deepEqual(store.snapshot().sessions, chain.slice(0, index + 1));
+  }
+  assert.equal((await inbox.scan()).imported, 0);
+  assert.deepEqual((await createStore(path.join(dir, 'data'))).snapshot().sessions, chain);
+  assert.equal((await call('/api/progress', { method: 'POST', body: { lessonId: `session-${recap.id}`, step: 'read' } })).status, 404);
+  assert.equal((await call('/api/progress', { method: 'POST', body: { lessonId: `session-${latest.id}`, step: 'read' } })).status, 200);
+});
+
+test('session imports reject supersession branches, unknown references and rewrites without changing history', async (t) => {
+  const { dir, store, call } = await fixture(t);
+  const inboxPath = path.join(dir, 'inbox'); await mkdir(inboxPath);
+  const inbox = createInbox(store, inboxPath);
+  const replacement = { ...recap, id: 'replacement-session', supersedes: recap.id };
+  for (const session of [recap, replacement]) {
+    await writeFile(path.join(inboxPath, `${session.id}.json`), JSON.stringify(session));
+    assert.equal((await inbox.scan()).imported, 1);
+  }
+  const before = store.snapshot();
+  const history = (await call('/api/bootstrap')).body.sessions;
+  for (const invalid of [
+    { ...recap, id: 'branch-session', supersedes: recap.id },
+    { ...recap, id: 'unknown-session', supersedes: 'never-imported' },
+    { ...recap, summary: 'An attempted rewrite of immutable history.' },
+  ]) {
+    const file = path.join(inboxPath, `${invalid.id}.json`);
+    await writeFile(file, JSON.stringify(invalid));
+    const scan = await inbox.scan();
+    assert.equal(scan.imported, 0); assert.equal(scan.rejected, 1);
+    assert.deepEqual(store.snapshot(), before);
+    const bootstrap = await call('/api/bootstrap');
+    assert.equal(bootstrap.status, 200);
+    assert.deepEqual(bootstrap.body.sessions, history);
+    assert.deepEqual(bootstrap.body.lessons.filter((lesson) => lesson.id.startsWith('session-')).map((lesson) => lesson.id), [`session-${replacement.id}`]);
+    await rm(file);
+  }
+  assert.deepEqual((await createStore(path.join(dir, 'data'))).snapshot(), before);
+});
+
+test('overlapping chat requests past the cooldown admit only one provider call and return 429 to the other', async (t) => {
+  let clock = Date.UTC(2026, 8, 16); let providerCalls = 0;
+  let enterProvider; let releaseProvider;
+  const entered = new Promise((resolve) => { enterProvider = resolve; });
+  const released = new Promise((resolve) => { releaseProvider = resolve; });
+  const { call } = await fixture(t, { now: () => clock, fetchImpl: async () => {
+    providerCalls++;
+    // Only the first invocation waits. A broken capacity guard must fail an
+    // assertion rather than deadlock a second invocation behind the same gate.
+    if (providerCalls === 1) { enterProvider(); await released; }
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'Routes coordinate state [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } })).status, 200);
+  const body = { question: 'Explain route ownership', mode: 'teach' };
+  const first = call('/api/chat', { method: 'POST', body });
+  try {
+    await Promise.race([entered, first.then((response) => { assert.fail(`The first request finished before reaching the provider gate (${response.status}).`); })]);
+    assert.equal(providerCalls, 1);
+    // Make the second request rate-limit eligible while the first is still
+    // unresolved; its rejection must come from in-flight capacity, not timing.
+    clock += 11000;
+    const second = call('/api/chat', { method: 'POST', body: { ...body, question: 'Explain repository ownership' } }).finally(() => releaseProvider());
+    const [accepted, rejected] = await Promise.all([first, second]);
+    assert.equal(accepted.status, 200);
+    assert.equal(rejected.status, 429);
+    assert.equal(providerCalls, 1);
+  } finally {
+    releaseProvider();
+    await first.catch(() => {});
+  }
+});
+
+test('missing sources return 503 and release chat capacity so repairing a source permits the next eligible request', async (t) => {
+  let clock = Date.UTC(2026, 8, 16);
+  const requests = [];
+  const { dir, call } = await fixture(t, { now: () => clock, fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'The repaired source describes route ownership [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } })).status, 200);
+  const source = path.join(dir, 'hopper/AGENTS.md');
+  await rm(source);
+  const body = { question: 'Explain route ownership', mode: 'teach', lessonId: 'state-and-routes' };
+  const unavailable = await call('/api/chat', { method: 'POST', body });
+  assert.equal(unavailable.status, 503);
+  assert.match(unavailable.body.error, /sources are unavailable/);
+  assert.equal(requests.length, 0);
+
+  const repaired = 'Repaired source: routes coordinate state; repositories own durable data.';
+  await writeFile(source, repaired);
+  clock += 11000;
+  const recovered = await call('/api/chat', { method: 'POST', body });
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.body.grounding, 'source-assisted');
+  assert.deepEqual(recovered.body.sources.map((entry) => entry.id), ['hopper-contracts']);
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0].messages[0].content.includes(repaired));
+});

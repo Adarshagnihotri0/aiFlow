@@ -1,0 +1,32 @@
+{
+  "id": "fieldnotes-focused-github",
+  "title": "Focused learning and private GitHub saving",
+  "date": "2026-09-16T10:00:00.000Z",
+  "status": "incomplete",
+  "summary": "Fieldnotes now offers optional Focused presentation: precise definitions, one learning task at a time, optional system-mapping and assumption-testing prompts, and reduced motion. Learning preferences, curated session lessons, progress and recall schedules are saved locally and copied automatically to a dedicated private GitHub repository. A real snapshot was uploaded and recovered into a separate new folder. Human phone and visual acceptance remain pending.",
+  "why": "The learner requested clearer mobile interaction, GitHub-backed learning records, and a presentation suited to precise, system-oriented exploration. Preferences are explicit rather than inferred from a diagnosis. Local saves keep studying available during a GitHub outage; remote conflicts stop uploads rather than overwrite independent changes. Recovery uses a new directory so it cannot replace the working notebook.",
+  "changes": [
+    "Added Focused presentation, literal definitions, optional Input/Owner/Output/Failure/Evidence prompts, and Assumption/Alternative/Tradeoff/Test prompts.",
+    "Added private-repository identity checks, serialized snapshots, durable upload intents, bounded retries and authenticated GitHub status.",
+    "Added recovery into a newly reserved directory with shared ownership and durable installation.",
+    "Prevented stale settings from re-enabling AI consent withdrawn by another browser.",
+    "Kept the existing model proxy and phone tunnel running; restarted only the independent portal."
+  ],
+  "concepts": ["Working copy", "Snapshot", "Ownership", "Concurrency", "Consent", "Evidence"],
+  "exercise": "Draw Read -> Local save -> GitHub snapshot. Add a network failure after the remote write but before its reply. Explain why retrying blindly is unsafe, what the saved upload intent tells us, and why a conflict should stop rather than overwrite. Then name one assumption in this design, one alternative and a test that distinguishes them.",
+  "sourceIds": ["proxy-boundaries", "hopper-contracts"],
+  "evidence": [
+    { "label": "Unit and API regression suite", "state": "verified", "reference": "npm test: 99 tests passed, including ownership, lost responses, GitHub recovery, receipt validity and stale consent." },
+    { "label": "Isolated browser regression suite", "state": "verified", "reference": "npm run test:browser: 28 tests passed using mocked APIs, including focus, drafts, reduced motion and narrow widths." },
+    { "label": "Real GitHub round trip", "state": "verified", "reference": "The running portal acknowledged its initial private snapshot. The recovery CLI restored one curated session and one progress entry into a new isolated folder." },
+    { "label": "Runtime boundaries", "state": "verified", "reference": "Public website returned 200, unpaired GitHub status returned 401, and the existing proxy process remained unchanged with health 200." },
+    { "label": "Human phone and visual acceptance", "state": "not-run", "reference": "Headless browser tests do not establish that the original phone connection problem is resolved or that the person finds the presentation clear." },
+    { "label": "Live tutoring quality", "state": "not-run", "reference": "Tutor prompt behavior was checked with mocked provider calls; no live answer quality claim is made." }
+  ],
+  "teaching": {
+    "plainExplanation": "A working copy is the version the app uses immediately. A snapshot is a saved copy at a particular moment. Here the Mac owns immediate saves and GitHub stores later copies with history. A pending snapshot means some recent work is only on the Mac. An upload intent is a small record of what the app meant to send, written before sending it. It helps distinguish a lost reply from a write that never happened.",
+    "example": "Suppose the app sends snapshot A and GitHub saves it, but the network drops the reply. The app must not assume failure means nothing was saved. On the next check, it compares the remote content with its recorded intent. If they match, it can acknowledge A. If another writer changed the remote content independently, the app stops and asks for inspection instead of overwriting it.",
+    "checkQuestion": "What does a successful local save prove, and what additional evidence is needed before saying the work is protected by GitHub?",
+    "checkAnswer": "A successful local save establishes the local persistence result under the checked conditions. It does not establish remote backup. An acknowledged matching GitHub snapshot is needed for that claim. Later local changes may still be pending, GitHub is not a transactional database here, and a successful backup does not prove every possible recovery or phone experience."
+  }
+}
