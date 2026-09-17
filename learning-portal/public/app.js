@@ -467,10 +467,28 @@ function renderSessions() {
 }
 function sessionLearningMap(session) {
   const activity = session.lesson ? progress(session.lesson) : {};
+  // Use the live journey rules: the organization projection deliberately does
+  // not evaluate today's review schedule. Navigation records no activity.
+  const { stage } = session.lesson ? nextLearningStep({ ...state.data, lessons: [session.lesson] }) : { stage: 'unavailable' };
+  const labels = { read: 'Learn from this session', try: 'Continue exercise', review: 'Recall this lesson', done: 'Revisit lesson' };
+  function resume() {
+    // Quiet refreshes preserve open notes. Re-resolve identity, availability and
+    // progress on activation so an old button cannot launch a retired lesson.
+    if (!state.data) return;
+    const current = organizeSessions(state.data.sessions, state.data.lessons, state.data.progress, state.data.reviews).find((entry) => entry.id === session.id);
+    if (!current?.lesson) {
+      closeDialog();
+      notify('This lesson is no longer available here. Open the current recap from Code updates.');
+      return;
+    }
+    const next = nextLearningStep({ ...state.data, lessons: [current.lesson] });
+    if (next.stage === 'review') reviewLesson(current.lesson);
+    else openLesson(current.lesson, next.stage === 'try');
+  }
   return el('section', { class: 'session-learning-map', 'aria-label': `Learning path: ${session.title}` },
     el('ol', { class: 'journey-steps', 'aria-label': 'Note to learning path' },
       el('li', {}, '1. Read notes'), el('li', {}, activity.read ? '2. Lesson read' : '2. Understand'), el('li', {}, activity.attempted ? '3. Attempt recorded' : '3. Try'), el('li', {}, '4. Recall')),
-    session.lesson ? button('Learn from this session', () => openLesson(session.lesson), 'secondary') : paragraph(session.archived ? 'Use the newer recap for learning.' : 'No linked lesson is available yet.', 'muted small'));
+    session.lesson ? button(labels[stage], resume, 'secondary') : paragraph(session.archived ? 'Use the newer recap for learning.' : 'No linked lesson is available yet.', 'muted small'));
 }
 function sessionTaskBoard(session) {
   return el('section', { class: 'stack', 'aria-label': 'Session tasks' }, el('h3', {}, 'Tasks, as recorded'),

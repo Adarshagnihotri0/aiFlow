@@ -600,6 +600,139 @@ test('Learn from a session follows its canonical lesson through read, try and re
     .toHaveText(['1. Read notes', '2. Lesson read', '3. Attempt recorded', '4. Recall']);
 });
 
+for (const width of [320, 1280]) {
+  for (const entry of ['card', 'note']) {
+    for (const stage of ['try', 'review']) {
+      test(`${width}px session ${entry} resumes ${stage} in one click without side effects`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        const { data, writes } = await fixture(page);
+        data.progress[lessonId] = { read: true, ...(stage === 'review' ? { attempted: true } : {}) };
+        const before = structuredClone({ progress: data.progress, reviews: data.reviews, profile: data.profile });
+        await page.goto('/#sessions');
+        if (width < 1100) await page.getByRole('button', { name: 'Ask anything', exact: true }).click();
+        await page.locator('#ask-question').fill('Keep my unsent learning question.');
+        if (width < 1100) await page.keyboard.press('Escape');
+        if (entry === 'note') await openCurrentNote(page);
+        const host = entry === 'note' ? page.locator('#dialog') : currentEntry(page);
+        await host.getByRole('button', { name: stage === 'try' ? 'Continue exercise' : 'Recall this lesson', exact: true }).click();
+        if (stage === 'try') {
+          await expect(page.locator('#dialog-title')).toHaveText(lessonTitle);
+          await expect(page.locator('#lesson-exercise')).toHaveJSProperty('open', true);
+          await expect(page.locator('#lesson-exercise > summary')).toBeFocused();
+          await expect(page.locator('#lesson-exercise')).toContainText(data.lessons[2].exercise);
+          await expect(page.locator('#lesson-exercise details')).toHaveJSProperty('open', false);
+          await expect(page.getByRole('button', { name: 'I tried the exercise', exact: true })).toBeEnabled();
+        } else {
+          await expect(page).toHaveURL(/#practice$/);
+          await expect(page.locator('#dialog')).toHaveJSProperty('open', false);
+          await expect(page.locator('.practice-card h2')).toHaveText(data.lessons[2].question);
+          await expect(page.locator('#practice-answer')).toHaveCount(0);
+          await expect(page.getByRole('button', { name: 'Reveal answer', exact: true })).toBeVisible();
+        }
+        await expect(page.locator('#ask-question')).toHaveValue('Keep my unsent learning question.');
+        await expect(page.locator('#chat-consent')).not.toBeChecked();
+        expect({ progress: data.progress, reviews: data.reviews, profile: data.profile }).toEqual(before);
+        expect(writes).toEqual([]);
+      });
+    }
+  }
+}
+
+for (const due of [1, 8_000_000_000_000]) {
+  test(`session shortcut respects recorded review due ${due}`, async ({ page }) => {
+    const { data, writes } = await fixture(page);
+    data.progress[lessonId] = { read: true, attempted: true };
+    data.reviews[lessonId] = { due };
+    await page.goto('/#sessions');
+    await currentEntry(page).getByRole('button', { name: due === 1 ? 'Recall this lesson' : 'Revisit lesson', exact: true }).click();
+    if (due === 1) {
+      await expect(page.locator('.practice-card h2')).toHaveText(data.lessons[2].question);
+      await expect(page.locator('#practice-answer')).toHaveCount(0);
+    } else {
+      await expect(page.locator('#dialog-title')).toHaveText(lessonTitle);
+      await expect(page.locator('#lesson-exercise')).toHaveJSProperty('open', false);
+    }
+    expect(writes).toEqual([]);
+  });
+}
+
+test('session shortcut rechecks a review deadline crossed while its note stays open', async ({ page }) => {
+  const now = new Date('2026-09-17T12:00:00Z');
+  await page.clock.install({ time: now });
+  const { data, writes } = await fixture(page);
+  data.progress[lessonId] = { read: true, attempted: true };
+  data.reviews[lessonId] = { due: now.getTime() + 60_000 };
+  await page.goto('/#sessions');
+  await openCurrentNote(page);
+  const shortcut = page.locator('#dialog').getByRole('button', { name: 'Revisit lesson', exact: true });
+  await expect(shortcut).toBeVisible();
+  await page.clock.setSystemTime(new Date(now.getTime() + 60_001));
+  await shortcut.click();
+  await expect(page.locator('.practice-card h2')).toHaveText(data.lessons[2].question);
+  await expect(page.locator('#practice-answer')).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
+for (const change of ['progress', 'removed', 'superseded']) {
+  test(`session shortcut rechecks ${change} after quiet refresh preserves an open note`, async ({ page }) => {
+    const { data, writes } = await fixture(page);
+    if (change !== 'progress') data.progress[lessonId] = { read: true, attempted: true };
+    await page.goto('/#sessions');
+    await openCurrentNote(page);
+    const note = await page.locator('#dialog > .dialog-body').elementHandle();
+    await page.locator('#ask-question').fill('Retain this while the notebook refreshes.');
+    if (change === 'progress') data.progress[lessonId] = { read: true };
+    else if (change === 'removed') data.lessons = data.lessons.filter(lesson => lesson.id !== lessonId);
+    else data.sessions.find(session => session.id === currentId).supersededBy = 'queue-v3';
+    const response = page.waitForResponse('**/api/bootstrap');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await response;
+    // The busy attribute is cleared only after the refreshed state is applied.
+    await expect(page.locator('#main')).toHaveAttribute('aria-busy', 'false');
+    await expectSameNode(note, '#dialog > .dialog-body');
+    await page.locator('#dialog').getByRole('button', { name: change === 'progress' ? 'Learn from this session' : 'Recall this lesson', exact: true }).click();
+    if (change === 'progress') {
+      await expect(page.locator('#lesson-exercise')).toHaveJSProperty('open', true);
+      await expect(page.locator('#lesson-exercise > summary')).toBeFocused();
+    } else {
+      await expect(page.locator('#dialog')).toHaveJSProperty('open', false);
+      await expect(page).toHaveURL(/#sessions$/);
+      await expect(page.locator('#notice')).toContainText('This lesson is no longer available here.');
+      await expect(page.locator('.practice-card')).toHaveCount(0);
+    }
+    await expect(page.locator('#ask-question')).toHaveValue('Retain this while the notebook refreshes.');
+    expect(writes).toEqual([]);
+  });
+}
+
+test('session without a canonical lesson has no learning shortcut', async ({ page }) => {
+  const { writes } = await fixture(page);
+  await page.goto('/#sessions');
+  const region = page.getByRole('region', { name: 'Learning path: Cache review notes', exact: true });
+  await expect(region).toContainText('No linked lesson is available yet.');
+  await expect(region.getByRole('button')).toHaveCount(0);
+  expect(writes).toEqual([]);
+});
+
+test('session recall shortcut preserves a different unresolved review', async ({ page }) => {
+  const { data, writes } = await fixture(page);
+  data.progress[lessonId] = { read: true, attempted: true };
+  await page.route('**/api/review', route => route.fulfill({ status: 503, json: { error: 'Rating not saved.' } }));
+  await page.goto('/#practice');
+  await expect(page.locator('.practice-card h2')).toHaveText('An unrelated recall question?');
+  await page.getByRole('button', { name: 'Reveal answer', exact: true }).click();
+  await page.getByRole('button', { name: 'Good: Got the idea', exact: true }).click();
+  await expect(page.locator('#main')).toContainText('Rating not saved.');
+  await navigate(page, 'sessions');
+  await currentEntry(page).getByRole('button', { name: 'Recall this lesson', exact: true }).click();
+  await expect(page).toHaveURL(/#practice$/);
+  await expect(page.locator('.practice-card h2')).toHaveText('An unrelated recall question?');
+  await expect(page.locator('#notice')).toContainText('Finish saving your current review first.');
+  await expect(page.locator('#main')).toContainText('Rating not saved.');
+  expect(data.reviews).toEqual({});
+  expect(writes).toEqual([]);
+});
+
 test('archived recaps never offer stale learning and lead back to the current lesson', async ({ page }) => {
   const { writes } = await fixture(page);
   await page.goto('/#sessions');
@@ -612,7 +745,7 @@ test('archived recaps never offer stale learning and lead back to the current le
   await expect(page.locator('#dialog-title')).toHaveText(oldTitle);
   const path = page.getByRole('region', { name: `Learning path: ${oldTitle}`, exact: true });
   await expect(path).toContainText('Use the newer recap for learning.');
-  await expect(path.getByRole('button', { name: 'Learn from this session', exact: true })).toHaveCount(0);
+  await expect(path.getByRole('button')).toHaveCount(0);
   await page.locator('#dialog > .dialog-body').getByRole('button', { name: 'Read the newer recap →', exact: true }).click();
   await expect(page.locator('#dialog-title')).toHaveText(currentTitle);
   await page.locator('#dialog').getByRole('region', { name: `Learning path: ${currentTitle}`, exact: true })
