@@ -14,6 +14,9 @@ export const profileDefault = { role: 'undecided', level: 'beginner', minutes: 2
 export const sessionSchema = z.object({
   id: id.max(64), title: text(160), date: z.string().datetime(), status: z.enum(['complete', 'incomplete']),
   summary: text(2000), why: text(2000), changes: z.array(text(700)).min(1).max(15),
+  // Do not default this field: immutable legacy recaps must serialize unchanged.
+  tasks: z.array(z.object({ id: id.max(64), title: text(240), status: z.enum(['todo', 'in-progress', 'done']) }).strict())
+    .max(30).refine((tasks) => new Set(tasks.map((task) => task.id)).size === tasks.length, 'Session task IDs must be unique.').optional(),
   concepts: z.array(text(80)).max(12), exercise: text(1500),
   evidence: z.array(z.object({ label: text(240), state: z.enum(['reported', 'verified', 'failed', 'not-run']), reference: text(500) }).strict()).min(1).max(15),
   sourceIds: z.array(id).min(1).max(12),

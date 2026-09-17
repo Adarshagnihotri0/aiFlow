@@ -2,6 +2,8 @@ import { ApiError, request } from './api.js';
 import { limits, boundedHistory } from './limits.js';
 import { nextLearningStep, phoneAddress } from './journey.js';
 import { learningAids, learningStyle } from './learning-aids.js';
+import { richText } from './rich-text.js';
+import { organizeSessions } from './session-workspace.js';
 import { el, text, list, paragraph, pill, button, link, chips, heading, empty, field, errorBox, select, icon } from './ui.js';
 
 const main = document.querySelector('#main');
@@ -9,6 +11,12 @@ const navigation = document.querySelector('#navigation');
 const headerActions = document.querySelector('#header-actions');
 const notice = document.querySelector('#notice');
 const dialog = document.querySelector('#dialog');
+const askPanel = document.querySelector('#ask-panel');
+const askModal = document.querySelector('#ask-modal');
+const askLauncher = document.querySelector('#ask-launcher');
+const wideScreen = matchMedia('(min-width: 1100px)');
+let askReturnFocus = null;
+let responsiveFocus = null;
 const routes = new Set(['today', 'learn', 'sessions', 'ask', 'practice', 'career']);
 const defaults = { role: 'undecided', level: 'beginner', minutes: 25, language: 'english', learningStyle: 'standard', aiConsent: false };
 const roles = { android: 'Android', frontend: 'Frontend', backend: 'Backend', undecided: 'Still exploring' };
@@ -56,6 +64,9 @@ function lock(reason = '') {
   });
   state.progressPending.clear();
   document.body.classList.remove('focused-learning');
+  document.body.classList.remove('has-assistant');
+  if (askModal.open) askModal.close();
+  askPanel.replaceChildren(); askPanel.hidden = true; askLauncher.hidden = true;
   closeDialog();
   headerActions.replaceChildren();
   navigation.hidden = true;
@@ -149,6 +160,7 @@ function renderNavigation() {
   navigation.hidden = !state.data;
   const active = ['learn', 'sessions'].includes(state.page) ? 'today' : state.page;
   navigation.replaceChildren(...[['today', 'Learn'], ['ask', 'Ask'], ['practice', 'Review'], ['career', 'Career']].map(([id, label]) => el('a', { href: `#${id}`, ...(active === id ? { 'aria-current': 'page' } : {}) }, icon(id), el('span', { text: label }))));
+  navigation.querySelector('[href="#ask"]').addEventListener('click', (event) => { event.preventDefault(); openAsk(); });
 }
 function todayTabs() {
   return el('nav', { class: 'tabs', 'aria-label': 'Browse your notebook' }, [['today', 'Your next step'], ['learn', 'All lessons'], ['sessions', 'Code updates']].map(([id, label]) => el('a', { href: `#${id}`, ...(state.page === id ? { 'aria-current': 'page' } : {}) }, label)));
@@ -160,9 +172,10 @@ function renderPage() {
   const selection = restoreInput && active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null;
   document.title = `${({ today: 'Today', learn: 'Learn', sessions: 'Sessions', ask: 'Ask', practice: 'Practice', career: 'Career' })[state.page]} · Fieldnotes`;
   main.setAttribute('aria-busy', 'false');
-  const views = { today: renderToday, learn: renderLearn, sessions: renderSessions, ask: renderAsk, practice: renderPractice, career: renderCareer };
+  const views = { today: renderToday, learn: renderLearn, sessions: renderSessions, ask: () => el('div', { class: 'narrow' }, heading('Your thinking space.', 'Keep a lesson open and ask alongside it. Your draft follows you.', 'Learning assistant'), button('Open Ask', openAsk), link('Browse session notes', '#sessions', 'secondary mt')), practice: renderPractice, career: renderCareer };
   main.replaceChildren(views[state.page]());
   renderNavigation();
+  renderChat();
   if (restoreInput) {
     const replacement = document.getElementById(active.id);
     replacement?.focus({ preventScroll: true });
@@ -170,6 +183,7 @@ function renderPage() {
   }
 }
 function go(page) {
+  if (page === 'ask') { openAsk(); return; }
   if (location.hash === `#${page}`) { state.page = page; renderPage(); main.focus(); }
   else location.hash = page;
 }
@@ -230,18 +244,96 @@ function renderLearn() {
 function openDialog(title, body, kind) {
   if (!dialog.open) state.returnFocus = document.activeElement;
   state.dialogKind = kind;
-  dialog.replaceChildren(el('div', { class: 'dialog-header' }, el('h2', { id: 'dialog-title', text: title }), button('×', closeDialog, '', { class: 'close-button', 'aria-label': 'Close dialog' })), el('div', { class: 'dialog-body' }, body));
+  dialog.replaceChildren(el('div', { class: 'dialog-header' }, el('h2', { id: 'dialog-title', text: title }), el('div', { class: 'row' }, button('Ask', openAsk, 'secondary', { 'aria-label': 'Ask while reading' }), button('×', closeDialog, '', { class: 'close-button', 'aria-label': 'Close dialog' }))), el('div', { class: 'dialog-body' }, body));
   if (!dialog.open) dialog.showModal();
+  const contextId = kind.startsWith('lesson:') ? kind.slice(7) : kind.startsWith('session:') ? `session-${kind.slice(8)}` : '';
+  if (!state.chatBusy && contextId && state.data.lessons.some((lesson) => lesson.id === contextId)) {
+    state.lessonId = contextId; state.failedChat = null; renderChat();
+  }
+  placeAskPanel();
   dialog.scrollTop = 0;
 }
 function closeDialog() { if (dialog.open) dialog.close(); }
 dialog.addEventListener('close', () => {
   state.dialogKind = '';
+  placeAskPanel();
   dialog.replaceChildren(); // Includes private pairing code and fetched source text.
   if (state.returnFocus?.isConnected) state.returnFocus.focus();
   else if (state.data) main.focus();
   state.returnFocus = null;
 });
+
+function placeAskPanel() {
+  const active = document.activeElement;
+  const selected = askPanel.contains(active) && active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null;
+  const visible = Boolean(state.data);
+  document.body.classList.toggle('has-assistant', visible);
+  const standalone = !wideScreen.matches && state.page === 'ask' && !askModal.open;
+  const host = wideScreen.matches ? (dialog.open ? dialog : document.body) : (askModal.open ? askModal : standalone ? main : document.body);
+  if (askPanel.parentElement !== host) host.append(askPanel);
+  askPanel.classList.toggle('standalone-assistant', standalone);
+  askPanel.hidden = !visible || (!wideScreen.matches && !askModal.open && !standalone);
+  askLauncher.hidden = !visible || wideScreen.matches || askModal.open;
+  askLauncher.setAttribute('aria-expanded', String(!askPanel.hidden));
+  if (selected && !askPanel.hidden) { active.focus({ preventScroll: true }); active.setSelectionRange(...selected); }
+}
+function openAsk(focus = true) {
+  if (!state.data) return;
+  askReturnFocus = document.activeElement;
+  // Select only known learning context. Opening never sends or overwrites a draft.
+  const contextId = state.dialogKind.startsWith('lesson:') ? state.dialogKind.slice(7)
+    : state.dialogKind.startsWith('session:') ? `session-${state.dialogKind.slice(8)}` : '';
+  if (!state.chatBusy && contextId && state.data.lessons.some((lesson) => lesson.id === contextId) && state.lessonId !== contextId) {
+    state.lessonId = contextId; state.failedChat = null; renderChat();
+  }
+  if (!wideScreen.matches && !askModal.open && (state.page !== 'ask' || dialog.open)) askModal.showModal();
+  placeAskPanel();
+  if (focus) document.querySelector('#ask-question')?.focus({ preventScroll: true });
+}
+function closeAsk() {
+  if (askModal.open) askModal.close();
+}
+askLauncher.addEventListener('click', () => openAsk());
+askModal.addEventListener('close', () => {
+  placeAskPanel();
+  if (responsiveFocus?.node.isConnected) {
+    responsiveFocus.node.focus({ preventScroll: true });
+    if (responsiveFocus.selection) responsiveFocus.node.setSelectionRange(...responsiveFocus.selection);
+  } else if (askReturnFocus?.isConnected) askReturnFocus.focus({ preventScroll: true });
+  responsiveFocus = null;
+  askReturnFocus = null;
+});
+wideScreen.addEventListener('change', () => {
+  const active = document.activeElement;
+  const typing = askPanel.contains(active);
+  if (wideScreen.matches && askModal.open) {
+    responsiveFocus = typing ? { node: active, selection: active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null } : null;
+    askModal.close();
+  } else if (!wideScreen.matches && typing && (state.page !== 'ask' || dialog.open) && !askModal.open) {
+    const selection = active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null;
+    askModal.showModal();
+    placeAskPanel();
+    active.focus({ preventScroll: true });
+    if (selection) active.setSelectionRange(...selection);
+    return;
+  }
+  placeAskPanel();
+});
+function renderChat() {
+  if (!state.data) return;
+  const active = document.activeElement;
+  const focused = askPanel.contains(active) && active.id;
+  const selection = focused && active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd] : null;
+  const scroll = askPanel.scrollTop;
+  askPanel.replaceChildren(el('div', { class: 'assistant-header' }, el('div', {}, el('span', { class: 'eyebrow' }, 'Fieldnotes · Ask'), el('h2', {}, 'Think it through')), button('Close Ask', closeAsk, 'secondary assistant-close')), renderAsk());
+  placeAskPanel();
+  askPanel.scrollTop = scroll;
+  if (focused) {
+    const replacement = document.getElementById(active.id);
+    replacement?.focus({ preventScroll: true });
+    if (selection && replacement?.tagName === 'TEXTAREA') replacement.setSelectionRange(...selection);
+  }
+}
 
 function sourceLinks(ids, back) {
   const sources = list(ids).map((value) => typeof value === 'string' ? { id: value } : value).filter((value) => value && typeof value.id === 'string');
@@ -252,6 +344,7 @@ function sourceLinks(ids, back) {
   }));
 }
 function openSource(id, back) {
+  if (askModal.open) closeAsk();
   const body = el('div', { class: 'stack' }, back && button('← Back', back, 'ghost'), paragraph('Loading source…', 'muted'));
   openDialog('Source notebook', body, `source:${id}`);
   const currentBody = body;
@@ -342,31 +435,70 @@ function revisionLinks(session) {
   }));
 }
 function renderSessions() {
-  const sessions = [...state.data.sessions].sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
-  return el('div', {}, heading('Your work, with the why.', 'A readable record of what changed—and what was actually checked.', 'Session notebook'), todayTabs(), el('div', { class: 'row between mb' }, paragraph(`${sessions.length} sessions · Refreshes when you return to this tab.`, 'muted small'), button('Refresh sessions', () => bootstrap(), 'secondary')), el('p', { class: 'callout mb' }, 'Reported ≠ verified. “Verified in session evidence” describes a supplied check, not independent certification or your personal skill. Agent-assisted work stays attributed to the session.'), sessions.length ? el('div', { class: 'grid' }, sessions.map(sessionCard)) : empty('Your first page is still blank.', 'No session records have arrived. Nothing is being invented to fill the space.', button('Refresh sessions', () => bootstrap(), 'secondary')));
+  const sessions = organizeSessions(state.data.sessions, state.data.lessons, state.data.progress, state.data.reviews);
+  const active = sessions.filter((session) => !session.archived);
+  const history = sessions.filter((session) => session.archived);
+  const search = el('input', { type: 'search', id: 'session-search', placeholder: 'Find a note, change, task or concept' });
+  const results = el('div', { class: 'session-timeline' });
+  function filter() {
+    const query = search.value.trim().toLowerCase();
+    const matches = active.filter((session) => [session.title, session.summary, ...session.changes, ...session.concepts, ...session.tasks.map((task) => task.title)].join(' ').toLowerCase().includes(query));
+    results.replaceChildren(...(matches.length ? matches.map((session) => el('div', { class: 'session-entry' }, sessionCard(session), sessionLearningMap(session))) : [paragraph('No matching published notes. Try a different word.', 'muted')]));
+  }
+  filter();
+  return el('div', {}, heading('From work to understanding.', 'Each published session becomes a note, a task view, and a learning path.', 'Session workspace'), todayTabs(),
+    el('div', { class: 'session-overview mb' }, metric(active.length, 'current notes'), metric(active.reduce((sum, session) => sum + session.taskCounts.total, 0), 'explicit tasks'), metric(active.filter((session) => session.lesson).length, 'linked lessons')),
+    el('p', { class: 'callout mb' }, 'Organized automatically from published notes—not captured from every coding conversation. Task status and evidence are supplied records, not independent verification.'),
+    el('div', { class: 'row between mb' }, paragraph(`${sessions.length} sessions · Refreshes when you return to this tab.`, 'muted small'), button('Refresh sessions', () => bootstrap(), 'secondary')),
+    (() => { search.addEventListener('input', filter); return field('Search session notes', search); })(), el('div', { class: 'mt' }, results),
+    history.length && el('details', { class: 'mt' }, el('summary', {}, `Earlier versions (${history.length})`), history.map(sessionCard)));
+}
+function sessionLearningMap(session) {
+  const activity = session.lesson ? progress(session.lesson) : {};
+  return el('section', { class: 'session-learning-map', 'aria-label': `Learning path: ${session.title}` },
+    el('ol', { class: 'journey-steps', 'aria-label': 'Note to learning path' },
+      el('li', {}, '1. Read notes'), el('li', {}, activity.read ? '2. Lesson read' : '2. Understand'), el('li', {}, activity.attempted ? '3. Attempt recorded' : '3. Try'), el('li', {}, '4. Recall')),
+    session.lesson ? button('Learn from this session', () => openLesson(session.lesson), 'secondary') : paragraph(session.archived ? 'Use the newer recap for learning.' : 'No linked lesson is available yet.', 'muted small'));
+}
+function sessionTaskBoard(session) {
+  return el('section', { class: 'stack', 'aria-label': 'Session tasks' }, el('h3', {}, 'Tasks, as recorded'),
+    session.tasks.length ? el('div', { class: 'task-board' }, [['todo', 'To do'], ['in-progress', 'In progress'], ['done', 'Done in record']].map(([status, label]) => el('section', { class: 'task-column' },
+      el('h3', {}, `${label} · ${session.taskCounts[status]}`), session.tasksByStatus[status].length ? el('ul', {}, session.tasksByStatus[status].map((task) => el('li', {}, task.title))) : paragraph('None recorded', 'muted small'))))
+      : paragraph('No explicit task list was published. Recorded changes below are not being invented into completed tasks.', 'muted small'));
 }
 function openSession(session) {
-  openDialog(text(session.title) || 'Session notes', el('div', { class: 'stack' }, el('div', { class: 'row' }, pill(session.status === 'complete' ? 'Session marked complete' : 'Session incomplete'), el('span', { class: 'session-date', text: formatDate(session.date, true) })), paragraph(session.summary), el('section', {}, el('h3', {}, 'Why this mattered'), paragraph(session.why || 'No rationale supplied.', 'body-text mt')), el('section', {}, el('h3', {}, 'Changes recorded in the session'), list(session.changes).length ? el('ul', {}, list(session.changes).map((change) => el('li', { text: text(change) }))) : paragraph('No changes supplied.', 'muted mt')), chips(session.concepts), el('section', {}, el('h3', {}, 'Evidence, not a blanket guarantee'), paragraph('These labels come from the session record. “Reported” is a claim; “verified” means that record reports a successful check. Review the references for scope and limitations.', 'muted small mt'), list(session.evidence).length ? list(session.evidence).map((entry) => el('div', { class: 'evidence-row' }, el('div', { class: 'row' }, el('strong', { text: text(entry?.label) || 'Unnamed check' }), evidencePill(entry?.state)), paragraph(entry?.reference, 'body-text small muted'))) : paragraph('No evidence supplied.', 'muted mt')), el('section', {}, el('h3', {}, 'Your next independent attempt'), paragraph(session.exercise || 'No exercise was supplied.', 'body-text mt'), paragraph('The session describes agent-assisted development. Only exercises you actually attempt should be described as your own practice.', 'callout mt')), el('section', {}, el('h3', {}, 'Source references'), sourceLinks(session.sourceIds, () => openSession(session)))), `session:${session.id}`);
+  const organized = organizeSessions(state.data.sessions, state.data.lessons, state.data.progress, state.data.reviews).find((entry) => entry.id === session.id);
+  if (!organized) return;
+  openDialog(text(session.title) || 'Session notes', el('div', { class: 'stack' },
+    el('div', { class: 'row' }, pill(session.status === 'complete' ? 'Session marked complete' : 'Session incomplete'), el('span', { class: 'session-date', text: formatDate(session.date, true) })),
+    paragraph(session.summary), revisionLinks(session),
+    el('section', {}, el('h3', {}, 'Why this mattered'), paragraph(session.why || 'No rationale supplied.', 'body-text mt')),
+    sessionTaskBoard(organized),
+    el('section', {}, el('h3', {}, 'Changes recorded in the session'), list(session.changes).length ? el('ol', { class: 'change-map' }, list(session.changes).map((change) => el('li', { text: text(change) }))) : paragraph('No changes supplied.', 'muted mt')),
+    chips(session.concepts),
+    el('section', {}, el('h3', {}, 'Evidence, not a blanket guarantee'), paragraph('These labels come from the session record. “Reported” is a claim; “verified” means that record reports a successful check. Review the references for scope and limitations.', 'muted small mt'), list(session.evidence).length ? list(session.evidence).map((entry) => el('div', { class: 'evidence-row' }, el('div', { class: 'row' }, el('strong', { text: text(entry?.label) || 'Unnamed check' }), evidencePill(entry?.state)), paragraph(entry?.reference, 'body-text small muted'))) : paragraph('No evidence supplied.', 'muted mt')),
+    el('section', { class: 'card hero-card' }, el('span', { class: 'eyebrow' }, 'After reading this note'), el('h3', {}, 'Make the idea your own.'), paragraph(session.exercise || 'No exercise was supplied.', 'body-text mt'), sessionLearningMap(organized), paragraph('Reading, attempts and recall ratings record activity—not mastery or authorship of agent-written code.', 'muted small mt')),
+    el('section', {}, el('h3', {}, 'Source references'), sourceLinks(session.sourceIds, () => openSession(session)))), `session:${session.id}`);
 }
 
 function askAbout(lesson, mode) {
-  closeDialog();
   if (state.chatBusy) { notify('Wait for the current answer before changing the question context.'); go('ask'); return; }
   state.mode = mode; state.lessonId = lesson.id;
   // Never replace a question the learner already typed.
   if (!state.draft.trim()) state.draft = mode === 'interview' ? text(lesson.interview) : `Help me understand: ${text(lesson.title)}`;
   state.failedChat = null; state.chatError = '';
+  renderChat();
   go('ask');
 }
 
 function renderAsk() {
-  const root = el('div', { class: 'narrow ask-page' }, heading('What feels confusing?', 'Ask in your own words. Basic questions are welcome.', 'Your code tutor'));
+  const root = el('div', { class: 'ask-page' }, paragraph('Ask in your own words. Basic questions are welcome.', 'muted small mb'));
   if (!state.data.chatAvailable) root.append(el('div', { class: 'error mb', role: 'status' }, paragraph('AI chat is disabled or unavailable on the server. Your draft stays here; no simulated answer will be substituted.'), button('Refresh availability', () => bootstrap(), 'secondary mt')));
   const mode = select('ask-mode', [['teach', 'Teach me the concept'], ['guide', 'Guide my next step'], ['interview', 'Interview practice']], state.mode);
   const lesson = select('ask-lesson', [['', 'General question'], ...state.data.lessons.map((entry) => [entry.id, text(entry.title) || 'Untitled lesson'])], state.lessonId);
   mode.disabled = state.chatBusy; lesson.disabled = state.chatBusy;
-  mode.addEventListener('change', () => { state.mode = mode.value; state.askOptionsOpen = options.open; state.failedChat = null; renderPage(); });
-  lesson.addEventListener('change', () => { state.lessonId = lesson.value; state.askOptionsOpen = options.open; state.failedChat = null; renderPage(); });
+  mode.addEventListener('change', () => { state.mode = mode.value; state.askOptionsOpen = options.open; state.failedChat = null; renderChat(); });
+  lesson.addEventListener('change', () => { state.lessonId = lesson.value; state.askOptionsOpen = options.open; state.failedChat = null; renderChat(); });
   const options = el('details', { class: 'ask-options mt', open: state.askOptionsOpen }, el('summary', {}, `Options · ${state.mode === 'interview' ? 'Interview practice' : state.mode === 'guide' ? 'One hint at a time' : 'Simple explanation'}${state.lessonId ? ' · Lesson selected' : ''}`), el('div', { class: 'form-grid' }, field('Teaching style', mode), field('Which lesson? (optional)', lesson)));
   options.addEventListener('toggle', () => { if (options.isConnected) state.askOptionsOpen = options.open; });
   options.append(el('section', { class: 'stack mt' }, paragraph('Add a prompt to your draft. Nothing is sent and AI consent is unchanged.', 'muted small'),
@@ -378,16 +510,17 @@ function renderAsk() {
       const next = state.draft.trim() ? `${state.draft}\n\n${prompt}` : prompt;
       if (next.length > limits.question) { notify('This prompt would exceed the question limit. Shorten the draft first.', null, true); return; }
       state.draft = next; state.failedChat = null; state.askOptionsOpen = options.open;
-      renderPage(); document.querySelector('#ask-question')?.focus();
+      renderChat(); document.querySelector('#ask-question')?.focus();
     }, 'secondary', { disabled: state.chatBusy })))));
   const selectedLesson = state.data.lessons.find((entry) => entry.id === state.lessonId);
   if (state.mode === 'interview' && text(selectedLesson?.interview)) {
-    options.append(el('section', { class: 'card stack mb' }, el('span', { class: 'eyebrow' }, 'Your interview prompt'), paragraph(selectedLesson.interview), paragraph('Any existing draft has been kept. The button below replaces it only when you choose.', 'muted small'), button('Use this interview question', () => { state.draft = selectedLesson.interview; renderPage(); document.querySelector('#ask-question')?.focus(); }, 'secondary', { disabled: state.chatBusy })));
+    options.append(el('section', { class: 'card stack mb' }, el('span', { class: 'eyebrow' }, 'Your interview prompt'), paragraph(selectedLesson.interview), paragraph('Any existing draft has been kept. The button below replaces it only when you choose.', 'muted small'), button('Use this interview question', () => { state.draft = selectedLesson.interview; renderChat(); document.querySelector('#ask-question')?.focus(); }, 'secondary', { disabled: state.chatBusy })));
   }
   const log = el('section', { class: 'chat-log', 'aria-label': 'Conversation', 'aria-live': 'polite', 'aria-relevant': 'additions' });
-  if (!state.messages.length && !state.draft.trim()) root.append(el('div', { class: 'prompt-suggestions' }, paragraph('Not sure where to start?', 'muted small'), button('What does this code do?', () => { state.draft = 'Explain what this code does in simple words, using one small example.'; renderPage(); document.querySelector('#ask-question')?.focus(); }, 'secondary', { disabled: state.chatBusy })));
+  root.append(el('p', { class: 'assistant-context small mb' }, `Context: ${selectedLesson?.title || 'General question · choose a lesson in Options'}`));
+  if (!state.messages.length && !state.draft.trim()) root.append(el('div', { class: 'prompt-suggestions' }, paragraph('Not sure where to start?', 'muted small'), button('What does this code do?', () => { state.draft = 'Explain what this code does in simple words, using one small example.'; renderChat(); document.querySelector('#ask-question')?.focus(); }, 'secondary', { disabled: state.chatBusy })));
   for (const message of state.messages) {
-    const card = el('article', { class: `chat-message ${message.role === 'user' ? 'user' : ''}` }, el('span', { class: 'eyebrow' }, message.role === 'user' ? 'You · learner' : 'AI assistant · not your own work'), paragraph(message.content));
+    const card = el('article', { class: `chat-message ${message.role === 'user' ? 'user' : ''}` }, el('span', { class: 'eyebrow' }, message.role === 'user' ? 'You · learner' : 'AI assistant · not your own work'), message.role === 'assistant' ? richText(message.content) : paragraph(message.content));
     if (message.role === 'assistant') {
       card.append(paragraph('Source-assisted, not independently verified. Check the references before relying on this answer.', 'muted small mt'));
       if (message.warning) card.append(paragraph(message.warning, 'callout warning'));
@@ -403,7 +536,7 @@ function renderAsk() {
   draft.addEventListener('input', () => { state.draft = draft.value; });
   const send = el('button', { type: 'submit', class: 'button', disabled: state.chatBusy || !state.data.chatAvailable || !state.data.profile.aiConsent }, state.chatBusy ? 'Asking…' : !state.data.profile.aiConsent ? 'Enable AI below to ask' : 'Send question');
   const form = el('form', { class: 'card chat-compose' }, field('Your question', draft), el('p', { id: 'draft-help', class: 'muted small mt' }, 'Nothing is sent until you press Send. Keep private information out.'), el('div', { class: 'row between' }, send, state.messages.length > 0 && button('Clear conversation', () => {
-    state.messages = []; state.chatError = ''; state.failedChat = null; renderPage(); notify('Conversation cleared from this tab. Your draft is unchanged.');
+    state.messages = []; state.chatError = ''; state.failedChat = null; renderChat(); notify('Conversation cleared from this tab. Your draft is unchanged.');
   }, 'ghost', { disabled: state.chatBusy || !state.messages.length })));
   form.addEventListener('submit', (event) => { event.preventDefault(); sendChat(false); });
   root.append(form, options);
@@ -452,7 +585,7 @@ async function sendChat(retry) {
   const draftAtSend = state.draft;
   state.chatBusy = true; state.chatError = ''; state.failedChat = payload;
   // Keep the draft, and add no fictional user/assistant turn on a failed request.
-  if (state.page === 'ask') renderPage();
+  renderChat();
   try {
     const response = await api('/api/chat', { method: 'POST', body: payload });
     if (!text(response.answer).trim()) throw new ApiError('The provider returned no answer. Your draft is still here.');
@@ -464,7 +597,7 @@ async function sendChat(retry) {
   } catch (error) {
     if (!ignored(error)) state.chatError = `${error.message} Retrying sends the question again to the external provider; a timed-out request may already have been processed.`;
   } finally {
-    if (epoch === state.epoch) { state.chatBusy = false; if (state.page === 'ask') renderPage(); }
+    if (epoch === state.epoch) { state.chatBusy = false; renderChat(); }
   }
 }
 

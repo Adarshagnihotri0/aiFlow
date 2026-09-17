@@ -58,11 +58,11 @@ The Mac, portal and tunnel must remain running. Quick Tunnel URLs change after r
 
 - Learn (home): one next step, keeping the same lesson through Read → Try → Recall. Your 15/25/45-minute preference is a time suggestion, not measured completion.
 - All lessons: six starter lessons on Kotlin, route ownership, coroutine lifecycle, contracts/tests, HTTP/proxies and honest interview attribution.
-- Ask: Teach, Guide and Interview modes; beginner English or Hinglish. Existing lesson text is not automatically translated.
+- Tutor: a persistent right-hand companion on desktop and an openable overlay on mobile, so the notebook stays the main workspace. Persistent means available while navigating the notebook, not a saved chat transcript. Teach, Guide and Interview modes support beginner English or Hinglish; existing lesson text is not automatically translated.
 - Review: reveal before rating; buttons or horizontal touch swipes. The full deck includes unread lessons; the guided home path selects the lesson you just attempted. Review scheduling is not proof of mastery.
 - An earlier review counts as recall activity even if it preceded the exercise; activity records do not certify an ordered learning sequence. A lesson's **Recall this lesson** button also allows extra practice before its next due date.
 - Career: interview prompts and local keyword comparison with a job description, not hiring or readiness prediction.
-- Code updates: curated change summaries become lessons and recall cards; reading and independent exercise attempts are distinct.
+- Code updates: published curated session notes are automatically organized newest first, with recorded changes, optional explicit tasks, evidence labels and linked learning steps. Reading and independent exercise attempts are distinct. This is not a record of every coding transcript.
 
 Only four fixed excerpts are approved initially: Hopper's AGENTS.md, the feed MediaFeedRoute, proxy repository instructions, and proxy src/server.ts. They are resolved under configured roots, capped, redacted and hashed. No arbitrary file browser or whole-codebase semantic index exists. Source links provide context, not proof that every AI statement is correct. Changed source hashes make affected cards due again.
 
@@ -86,6 +86,10 @@ Chat requires saved explicit consent and a submitted question. Selected source e
 Do not send private or confidential material. Pattern-based redaction is defense in depth, not a complete secret detector. Chat has no tools, shell, file-write, device-control or autonomous coding capability. Source text is labelled untrusted data, though prompt instructions cannot guarantee a model ignores all prompt injection.
 
 Chat transcripts stay in this tab's memory, not portal persistence. The tutor receives at most four recent exchanges; history entries are shortened to 4,000 characters, questions to 2,000. Clearing the tab cannot undo provider processing or forwarding. Admission is one concurrent request, ten seconds apart, at most thirty attempts/hour per portal process. No automatic retries; a timeout or disconnect does not prove upstream work stopped.
+
+Teach requests more depth for substantial questions: roughly 900 words when useful, with definitions, a worked example, tradeoffs and an independent check. Narrow questions should stay shorter; length is a prompt target, not a guaranteed result. Teach uses a 3,000-token output budget; Guide remains one hint under 200 words and Interview one question at a time under 250 words, each with a 1,400-token budget. The response safety cap remains 16,000 characters. A provider-reported output-limit stop is surfaced as potentially incomplete, without automatic continuation.
+
+Tutor replies support only a small, text-safe formatting subset: paragraphs, headings, flat lists, fenced code, inline code, bold and emphasis. Raw HTML is never interpreted; links, images and tables are not rendered as interactive/rich content. This is not full Markdown or executable code. Formatting does not verify the answer or turn illustrative code into repository evidence.
 
 ## Publish a curated session
 
@@ -119,13 +123,27 @@ After meaningful work, produce a small JSON recap from observable changes and re
 npm run session:publish -- /absolute/path/to/curated-session.json
 ```
 
-IDs are 2–64 lowercase letters/digits/hyphens, starting with a letter. Files are capped at 32KB. Approved source IDs: `hopper-contracts`, `feed-route`, `proxy-boundaries`, `proxy-routing`. The strict schema is in server/schema.js. `teaching` is optional for compatibility but should be supplied for new beginner lessons. If absent, the UI explicitly notes the missing beginner example rather than fabricating one.
+IDs are 2–64 lowercase letters/digits/hyphens, starting with a letter. Files are capped at 32KB. Approved source IDs: `hopper-contracts`, `feed-route`, `proxy-boundaries`, `proxy-routing`. The strict schema is in [server/schema.js](server/schema.js). `teaching` is optional for compatibility but should be supplied for new beginner lessons. If absent, the UI explicitly notes the missing beginner example rather than fabricating one.
+
+`tasks` is optional: an array of at most 30 explicit objects with only `id`, `title` and `status`. Task IDs follow the same 2–64-character rule and must be unique **within that session**. Titles are trimmed, nonblank and at most 240 characters. Status is required and must be `todo`, `in-progress` or `done`; it is never inferred. An explicit empty array is valid. Omitting tasks leaves older immutable records unchanged—no default field is added during validation or snapshot serialization.
+
+For example, a publisher may include `"tasks": [{"id":"verify-recovery","title":"Check recovery after failure","status":"todo"}]`. These are publisher-recorded task states, not editable personal checkboxes or independently certified completion. `changes` remains a separate list of recorded changes, never an inferred completed-task list. Session status, task status, evidence and learner activity are separate facts.
 
 Evidence labels are `reported`, `verified`, `failed`, `not-run`. “Verified” is a producer assertion backed by its stated reference, not independent certification. State exact checks and limitations. Never attribute agent-written code to the learner. No raw transcripts, credentials, personal identifiers or full model responses.
 
 The portal scans the inbox every 15 seconds. Return to the browser tab or press Refresh sessions. Invalid records are rejected; bootstrap includes import counts, not raw private error content.
 
 Repeated identical IDs are idempotent; conflicting rewrites are rejected. A correction/completion uses a new ID plus `"supersedes": "earlier-id"`. The earlier record must already be imported and not already superseded. History is retained with a newer/earlier link; only current recaps become active lessons/cards. Import a chain in order, or allow subsequent polling passes. Capacity is 200 immutable sessions including historical versions; automatic archival is not implemented.
+
+### Session organization and guided learning
+
+Automatic organization starts **after deliberate publication**, not after every agent message. A published note is linked to its canonical `session-<session-id>` lesson and offers Read → Try → Recall using the existing activity rules. Publishing a note does not mark it read, complete an exercise, submit a tutor question or grant AI consent. Notes without a matching lesson remain visible but have no fabricated learning link. Historical superseded notes retain their changes, tasks and evidence but cannot launch their stale recap as a lesson.
+
+The integration helper [public/session-workspace.js](public/session-workspace.js) exports `organizeSessions(sessions, lessons, progress, reviews)`. It is a detached, pure view of supplied data: newest first, with equal dates ordered by session ID and missing/invalid dates last. Records expose explicit task groups/counts, counts for each producer-supplied evidence label, canonical lesson links and a learning stage. It does not write notebook state, collect transcripts, generate explanations or send network requests.
+
+For deterministic organization, learning stages reflect recorded activity and explicitly invalidated reviews (`due: 0`), not the current wall clock. `done` means reading, an exercise attempt and recall activity exist; it does not mean mastery or that no review is due today. The helper exposes `reviewDue` separately; the existing Review scheduling UI owns current-time due checks. The scoped helper and schema do not by themselves render the workspace; browser integration owns the display and actions.
+
+GitHub snapshot ownership, timing, privacy boundaries and conflict/recovery behaviour are unchanged. Optional published tasks travel as part of their curated session records; no new transcript collection or synchronization channel is added.
 
 ## Storage and recovery
 
@@ -172,6 +190,8 @@ Startup no longer guesses that a PID lock is stale and deletes it. After an uncl
 `npm test` covers authentication/CSRF boundaries, pairing, review deduplication, source freshness, schema limits, concurrent chatbot admission, missing-source recovery, immutable recap updates and storage failure fencing. Provider calls are mocked: passing tests do not prove live model availability or factual answers. Browser and phone acceptance, live-provider behaviour and tunnel uptime are separate checks. Human review owns final visual acceptance.
 
 GitHub tests use injected responses to cover private-repository binding, lost upload responses, conflicts, rate limiting, concurrent local writes, restore ownership and durability failures. They never send real credentials or notebook data.
+
+[test/session-workspace.test.js](test/session-workspace.test.js) specifies canonical session-to-lesson IDs, deterministic ordering, missing optional data, explicit task grouping, separate evidence counts, immutable inputs, superseded-history safety, journey activity stages, legacy serialization and strict task limits/duplicate rejection. These pure tests require no browser, provider or running service and run as part of `npm test`.
 
 For isolated mobile browser checks:
 

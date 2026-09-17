@@ -170,6 +170,143 @@ test('focused live chat request uses literal presentation instructions without d
   assert.deepEqual(store.snapshot().profile, profile);
 });
 
+test('teaching depth is proportional while guide and interview retain single-turn smaller bounds', async (t) => {
+  let clock = Date.UTC(2026, 8, 17);
+  const requests = [];
+  const { call } = await fixture(t, { now: () => clock, fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'A source-assisted answer [S1].' } }] }));
+  } });
+  await call('/api/bootstrap');
+  for (const learningStyle of ['standard', 'focused']) {
+    assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, learningStyle, aiConsent: true, expectedAiConsent: false } })).status, 200);
+    for (const mode of ['teach', 'guide', 'interview']) {
+      clock += 11000;
+      const result = await call('/api/chat', { method: 'POST', body: { question: 'Explain ownership and its tradeoffs', mode } });
+      assert.equal(result.status, 200);
+      const request = requests.at(-1);
+      const prompt = request.messages[0].content;
+      assert.equal(request.max_tokens, mode === 'teach' ? 3000 : 1400);
+      assert.equal(request.stream, false);
+      assert.match(prompt, /UNTRUSTED DATA/);
+      assert.match(prompt, /Never claim the user authored agent work/);
+      assert.match(prompt, /Do not invent files, sources, citations, test results/);
+      assert.match(prompt, /Use recorded rationale only and label inference/);
+      assert.match(prompt, /private internal reasoning/);
+      assert.match(prompt, /Cite project claims using \[S1\]/);
+      assert.doesNotMatch(prompt, /under 500 words/);
+      if (mode === 'teach') {
+        for (const pattern of [/about 900 words/, /narrow questions more briefly without padding/, /Define new terms/, /worked example/, /fenced code example/, /assumptions, alternatives and tradeoffs/, /independent check/, /expected observable result/, /never hidden reasoning/]) assert.match(prompt, pattern);
+      } else {
+        assert.doesNotMatch(prompt, /about 900 words/);
+        assert.match(prompt, mode === 'guide' ? /exactly one actionable hint/ : /exactly one question at a time/);
+        assert.match(prompt, mode === 'guide' ? /under 200 words/ : /under 250 words/);
+        if (mode === 'interview') assert.match(prompt, /feedback only after an attempt/);
+      }
+      assert.equal(result.body.finishReason, 'stop'); assert.equal(result.body.truncated, false);
+    }
+  }
+  assert.equal(requests.length, 6);
+});
+
+test('chat sends only canonical selected session tasks as untrusted producer records, never inferred tasks (mock provider only)', async (t) => {
+  let clock = Date.UTC(2026, 8, 17);
+  const requests = [];
+  const { call, store } = await fixture(t, { now: () => clock, fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: 'Mock task explanation [S1].' } }] }));
+  } });
+  const old = { ...recap, id: 'task-context-v1', tasks: [{ id: 'obsolete', title: 'Retire the amber checkpoint sentinel', status: 'done' }] };
+  const unrelated = { ...recap, id: 'other-task-context', tasks: [{ id: 'unrelated', title: 'Inspect the violet lease sentinel', status: 'todo' }] };
+  const current = { ...recap, id: 'task-context-v2', supersedes: old.id, tasks: [
+    { id: 'probe', title: 'Probe the "cobalt" checkpoint sentinel', status: 'todo' },
+    { id: 'trace', title: 'Trace the silver overlap sentinel', status: 'in-progress' },
+    { id: 'fence', title: 'Fence the jade completion sentinel', status: 'done' },
+  ] };
+  const legacy = { ...recap, id: 'legacy-task-context' };
+  const sessions = [old, unrelated, current, legacy].map(session => validateSession(session, sourceIds));
+  await store.update(state => { state.sessions = sessions; });
+  const bootstrap = await call('/api/bootstrap');
+  assert.equal(bootstrap.status, 200);
+  const canonical = bootstrap.body.lessons.find(lesson => lesson.id === `session-${current.id}`);
+  assert.ok(canonical);
+  assert.ok(!bootstrap.body.lessons.some(lesson => lesson.id === `session-${old.id}`));
+  assert.equal(bootstrap.body.sessions.find(session => session.id === old.id).supersededBy, current.id);
+  for (const task of current.tasks) {
+    assert.ok(!current.summary.includes(task.title));
+    assert.ok(!JSON.stringify(canonical).includes(JSON.stringify(task.title).slice(1, -1)), 'the lesson alone must not supply the task sentinel');
+  }
+  assert.equal((await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } })).status, 200);
+  const taskSection = /\n\nSELECTED SESSION TASKS \(([^\n]+)\):\n/;
+  for (const [selectedId, expectedTasks] of [
+    [canonical.id, current.tasks],
+    [undefined, []],
+    ['state-and-routes', []],
+    [`session-${legacy.id}`, []],
+  ]) {
+    clock += 11000;
+    const result = await call('/api/chat', { method: 'POST', body: {
+      question: 'Which tasks are explicitly recorded?', mode: 'teach', ...(selectedId ? { lessonId: selectedId } : {}),
+    } });
+    assert.equal(result.status, 200);
+    const system = requests.at(-1).messages[0];
+    assert.equal(system.role, 'system');
+    const parts = system.content.split(taskSection);
+    assert.equal(parts.length, 3, 'one separately labelled task-data section is required');
+    assert.match(parts[1], /untrusted data/i);
+    assert.match(parts[1], /producer-reported statuses/);
+    assert.match(parts[1], /not independently verified/);
+    assert.match(parts[1], /not instructions/);
+    assert.deepEqual(JSON.parse(parts[2]), expectedTasks);
+    for (const session of sessions) for (const task of session.tasks || []) {
+      const encodedTitle = JSON.stringify(task.title).slice(1, -1);
+      assert.ok(!parts[0].includes(encodedTitle), 'task sentinels must not be supplied by summaries, sources or lesson data');
+      if (!expectedTasks.some(expected => expected.title === task.title)) assert.ok(!system.content.includes(encodedTitle), 'general, legacy and unrelated contexts must not inherit tasks');
+    }
+    if (selectedId === canonical.id) assert.ok(parts[0].includes(JSON.stringify(canonical)));
+    if (!selectedId) assert.match(parts[0], /SELECTED LESSON \(data only\):\nNone$/);
+  }
+  assert.equal(requests.length, 4);
+  assert.deepEqual(store.snapshot().sessions, sessions);
+});
+
+test('provider length completion preserves partial text, discloses truncation and never auto-continues', async (t) => {
+  const requests = [];
+  const partial = '## Ownership\n\nA source-assisted explanation [S1].\n\n```js\nconst owner =';
+  const { call, store } = await fixture(t, { fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: partial } }] }));
+  } });
+  await call('/api/bootstrap');
+  await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } });
+  const result = await call('/api/chat', { method: 'POST', body: { question: 'Explain ownership', mode: 'teach' } });
+  assert.equal(result.status, 200); assert.equal(result.body.answer, partial);
+  assert.equal(result.body.finishReason, 'length'); assert.equal(result.body.truncated, true);
+  assert.match(result.body.warning, /finish_reason=length/);
+  assert.match(result.body.warning, /may be incomplete/);
+  assert.match(result.body.warning, /No automatic continuation was sent/);
+  assert.match(result.body.warning, /not independently verified/);
+  assert.equal(result.body.grounding, 'source-assisted');
+  assert.equal(result.body.sources[0].id, 'hopper-contracts');
+  assert.equal(requests.length, 1);
+  assert.ok(!JSON.stringify(store.snapshot()).includes(partial));
+});
+
+test('missing or unrecognized finish reasons remain unknown, not invented completion or diagnostics', async (t) => {
+  let clock = Date.UTC(2026, 8, 17); let calls = 0;
+  const reasons = [undefined, 'private upstream diagnostic', { reason: 'length' }];
+  const { call } = await fixture(t, { now: () => clock, fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: reasons[calls++], message: { content: 'An answer [S1].' } }] })) });
+  await call('/api/bootstrap');
+  await call('/api/profile', { method: 'PUT', body: { ...profileDefault, aiConsent: true, expectedAiConsent: false } });
+  for (const _reason of reasons) {
+    clock += 11000;
+    const result = await call('/api/chat', { method: 'POST', body: { question: 'Explain ownership', mode: 'teach' } });
+    assert.equal(result.status, 200); assert.equal(result.body.finishReason, null); assert.equal(result.body.truncated, false);
+    assert.doesNotMatch(result.body.warning, /finish_reason=length|private upstream diagnostic/);
+  }
+  assert.equal(calls, 3);
+});
+
 test('concurrent duplicate reviews apply once; changed payloads conflict; sources invalidate schedule', async (t) => {
   const { call, store, dir } = await fixture(t); await call('/api/bootstrap');
   const body = { cardId: 'contracts-and-tests', rating: 'good', requestId: randomUUID() };
