@@ -30,7 +30,7 @@ async function fixture(t, options = {}) {
         method, headers: { Host: remote ? 'notebook.example' : '127.0.0.1:3210', ...(auth && cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json', Origin: remote ? 'https://notebook.example' : 'http://127.0.0.1:3210' } : {}), ...headers },
       }, (incoming) => {
         const chunks = []; incoming.on('data', (chunk) => chunks.push(chunk));
-        incoming.on('end', () => resolve({ status: incoming.statusCode, headers: new Headers(Object.entries(incoming.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value])), json: async () => JSON.parse(Buffer.concat(chunks).toString()) }));
+        incoming.on('end', () => resolve({ status: incoming.statusCode, headers: new Headers(Object.entries(incoming.headers).map(([key, value]) => [key, Array.isArray(value) ? value.join(', ') : value])), json: async () => incoming.headers['content-type']?.includes('application/json') ? JSON.parse(Buffer.concat(chunks).toString()) : Buffer.concat(chunks).toString() }));
       });
       request.on('error', reject); request.end(body === undefined ? undefined : JSON.stringify(body));
     });
@@ -39,6 +39,36 @@ async function fixture(t, options = {}) {
   }
   return { dir, store, call };
 }
+test('external links may open only the public shell, never cross-site APIs, frames or writes', async (t) => {
+  const { dir, store, call } = await fixture(t);
+  await mkdir(path.join(dir, 'public'));
+  await writeFile(path.join(dir, 'public/index.html'), '<!doctype html><title>Fieldnotes</title>');
+  const navigation = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' };
+  for (const route of ['/', '/index.html']) {
+    const result = await call(route, { remote: true, auth: false, headers: navigation });
+    assert.equal(result.status, 200);
+    assert.match(result.body, /<title>Fieldnotes<\/title>/);
+    assert.equal(result.headers.get('set-cookie'), null);
+    assert.equal(result.headers.get('x-frame-options'), 'DENY');
+  }
+  await call('/api/bootstrap'); // Even an authenticated browser cannot bypass the boundary.
+  const before = store.snapshot();
+  for (const route of ['/api/bootstrap', '/api/github', '/api/source/hopper-contracts', '/health', '/app.js']) {
+    assert.equal((await call(route, { remote: true, headers: navigation })).status, 403, route);
+  }
+  for (const headers of [
+    { ...navigation, 'Sec-Fetch-Dest': 'iframe' },
+    { ...navigation, 'Sec-Fetch-Mode': 'cors' },
+    { 'Sec-Fetch-Site': 'cross-site' },
+    { ...navigation, Host: 'evil.example' },
+  ]) assert.equal((await call('/', { remote: true, headers })).status, 403);
+  for (const route of ['/', '/api/login', '/api/pair', '/api/logout', '/api/progress', '/api/chat']) {
+    assert.equal((await call(route, { remote: true, method: 'POST', body: {}, headers: navigation })).status, 403, route);
+  }
+  assert.equal((await call('/api/profile', { remote: true, method: 'PUT', body: profileDefault, headers: navigation })).status, 403);
+  assert.deepEqual(store.snapshot(), before);
+  assert.equal((await call('/api/bootstrap', { remote: true, auth: false })).status, 401);
+});
 test('private data requires pairing remotely; local bootstrap grants only direct loopback', async (t) => {
   const { call } = await fixture(t);
   assert.equal((await call('/api/bootstrap', { remote: true, auth: false })).status, 401);

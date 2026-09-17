@@ -33,7 +33,11 @@ export function createApp({ store, roots, publicDirectory, localAuthority = '127
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', 'Cross-Origin-Opener-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" });
     const host = req.get('host');
     if (!localHosts.has(host) && host !== publicHost) return res.status(403).json({ error: 'This host is not approved.' });
-    if (req.get('sec-fetch-site') === 'cross-site') return res.status(403).json({ error: 'Cross-site access is not allowed.' });
+    // Following an external link is safe only for the data-free public shell.
+    // Never extend this exception to APIs, subresources, frames or mutations.
+    const publicNavigation = req.method === 'GET' && ['/', '/index.html'].includes(req.path)
+      && req.get('sec-fetch-mode') === 'navigate' && req.get('sec-fetch-dest') === 'document';
+    if (req.get('sec-fetch-site') === 'cross-site' && !publicNavigation) return res.status(403).json({ error: 'Cross-site access is not allowed.' });
     const forwarded = Object.keys(req.headers).some((key) => key.startsWith('x-forwarded-') || key.startsWith('cf-') || key === 'forwarded');
     req.isLocal = localHosts.has(host) && !forwarded && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
     req.expectedOrigin = localHosts.has(host) ? `http://${host}` : publicOrigin;
