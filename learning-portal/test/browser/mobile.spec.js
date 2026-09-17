@@ -355,8 +355,8 @@ test('phone setup is visible locally and uses only the public address', async ({
   await fixture(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByText('Manual connection', { exact: true }).click();
   await expect(page.getByRole('status', { name: 'Phone website address' })).toHaveText('https://example.trycloudflare.com');
-  await page.getByRole('button', { name: 'Create pairing code', exact: true }).click();
   await expect(page.locator('.pair-code')).toHaveText('DEMO-NOTREAL');
   await page.keyboard.press('Escape');
   await expect(page.locator('.pair-code')).toHaveCount(0);
@@ -392,6 +392,7 @@ test('remote login explains the Mac step without exposing local setup', async ({
   await page.route('**/api/**', route => route.fulfill({ status: 401, json: { error: 'Pair this browser.' } }));
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Connect your phone.' })).toBeVisible();
+  await page.getByText('Enter a code instead', { exact: true }).click();
   await expect(page.getByRole('textbox', { name: 'Code from your Mac' })).toBeVisible();
   await expect(page.locator('#connect-phone')).toHaveCount(0);
 });

@@ -68,6 +68,10 @@ async function fixture(page, { aiConsent = false, chat, sources = [] } = {}) {
     requests.push({ path, method });
     if (body !== null) writes.push({ path, body });
     if (path === '/api/bootstrap' && method === 'GET') return route.fulfill({ json: data });
+    if (path === '/api/login' && method === 'POST') {
+      data.authenticated = true;
+      return route.fulfill({ json: { ok: true } });
+    }
     if (!data.authenticated) return route.fulfill({ status: 401, json: { error: 'Fixture browser is locked.' } });
     const source = sources.find(entry => path === `/api/source/${encodeURIComponent(entry.id)}`);
     if (source && method === 'GET') return route.fulfill({ json: source });
@@ -503,7 +507,7 @@ test('an answer arriving after navigation keeps the new draft and the open note 
 });
 
 test('Clear removes both message roles; signing out also clears drafts and prevents history resurfacing', async ({ page }) => {
-  const { data, writes } = await fixture(page, { aiConsent: true });
+  const { writes } = await fixture(page, { aiConsent: true });
   await page.goto('/#ask');
   await page.locator('#ask-question').fill('Private first question.');
   await page.getByRole('button', { name: 'Send question', exact: true }).click();
@@ -529,12 +533,13 @@ test('Clear removes both message roles; signing out also clears drafts and preve
   await expect(page.locator('.chat-message')).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('Private unsent signout sentinel.');
   // Reauthenticate without a reload so this checks the actual lock/reset path.
-  data.authenticated = true;
-  await page.getByRole('button', { name: 'Check connection again', exact: true }).click();
+  await page.getByText('Enter a code instead', { exact: true }).click();
+  await page.getByLabel('Code from your Mac', { exact: true }).fill('DEMO-NOTREAL');
+  await page.getByRole('button', { name: 'Open my notebook', exact: true }).click();
   await expect(page.locator('#ask-panel')).toBeVisible();
   await expect(page.locator('#ask-question')).toHaveValue('');
   await expect(page.locator('.chat-message')).toHaveCount(0);
-  expect(writes.map(entry => entry.path)).toEqual(['/api/chat', '/api/chat', '/api/logout']);
+  expect(writes.map(entry => entry.path)).toEqual(['/api/chat', '/api/chat', '/api/logout', '/api/login']);
 });
 
 test('session search includes changes, concepts and tasks, and task groups use only explicit records', async ({ page }) => {

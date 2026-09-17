@@ -4,8 +4,10 @@ import { nextLearningStep, phoneAddress } from './journey.js';
 import { learningAids, learningStyle } from './learning-aids.js';
 import { richText } from './rich-text.js';
 import { organizeSessions } from './session-workspace.js';
+import { consumePairingLink, pairingQr } from './pairing.js';
 import { el, text, list, paragraph, pill, button, link, chips, heading, empty, field, errorBox, select, icon } from './ui.js';
 
+let initialPairing = consumePairingLink(location, history);
 const main = document.querySelector('#main');
 const navigation = document.querySelector('#navigation');
 const headerActions = document.querySelector('#header-actions');
@@ -146,11 +148,10 @@ function renderLogin(reason = '') {
     finally { submit.disabled = false; submit.textContent = 'Open my notebook'; }
   });
   main.replaceChildren(el('section', { class: 'card login' }, el('span', { class: 'eyebrow' }, 'Website connected · notebook locked'), el('h1', {}, 'Connect your phone.'), reason && paragraph(reason, 'callout warning mt'),
-    el('ol', { id: 'login-help', class: 'setup-steps' },
-      el('li', {}, 'On your Mac, open Fieldnotes at http://127.0.0.1:3210.'),
-      el('li', {}, 'Choose Connect phone → Create pairing code.'),
-      el('li', {}, 'Enter that code below. No account or password needed.')),
-    form, connectionHelp(), button('Check connection again', () => bootstrap(), 'ghost full mt')));
+    paragraph('On your Mac, choose Connect phone. Scan the QR with your phone camera and open the link—your notebook opens automatically.', 'mt'),
+    el('details', { class: 'mt', ...(reason ? { open: true } : {}) }, el('summary', {}, 'Enter a code instead'),
+      el('p', { id: 'login-help', class: 'muted small' }, 'On your Mac: http://127.0.0.1:3210 → Connect phone → Manual connection.'), form),
+    connectionHelp()));
 }
 
 function renderHeader() {
@@ -187,7 +188,18 @@ function go(page) {
   if (location.hash === `#${page}`) { state.page = page; renderPage(); main.focus(); }
   else location.hash = page;
 }
-window.addEventListener('hashchange', () => { if (location.hash === '#main') { main.focus(); return; } state.page = route(); closeDialog(); renderPage(); if (state.data) main.focus(); });
+window.addEventListener('hashchange', () => {
+  const pairing = consumePairingLink(location, history);
+  if (pairing) {
+    initialPairing = pairing;
+    lock(); // Cancel old work if the scanner reuses an already-open tab.
+    state.page = route();
+    void start();
+    return;
+  }
+  if (location.hash === '#main') { main.focus(); return; }
+  state.page = route(); closeDialog(); renderPage(); if (state.data) main.focus();
+});
 window.addEventListener('focus', () => { if (state.data && document.visibilityState === 'visible') bootstrap({ quiet: true }); });
 document.addEventListener('visibilitychange', () => { if (state.data && document.visibilityState === 'visible') bootstrap({ quiet: true }); });
 window.addEventListener('online', () => { if (state.data) bootstrap({ quiet: true }); });
@@ -718,10 +730,21 @@ async function compareCareer() {
   finally { if (epoch === state.epoch) { state.careerBusy = false; if (state.page === 'career') renderPage(); } }
 }
 
+// Reopening the dialog joins issuance already in flight. A dismissed request
+// must not arrive later and invalidate the replacement dialog's displayed QR.
+let pendingPairing = null;
+function requestPairing() {
+  if (!pendingPairing) {
+    pendingPairing = api('/api/pair', { method: 'POST', body: {} })
+      .finally(() => { pendingPairing = null; });
+  }
+  return pendingPairing;
+}
+
 function openConnect() {
   if (!state.data?.local) return;
   const address = phoneAddress(state.data.publicUrl);
-  const pairArea = el('div', { 'aria-live': 'polite' });
+  const pairArea = el('div', { class: 'stack', 'aria-live': 'polite' });
   const copyStatus = el('p', { class: 'muted small', role: 'status' });
   const copy = button('Copy phone address', async () => {
     try { await navigator.clipboard.writeText(address); copyStatus.textContent = 'Address copied. Send it to your phone and open it there.'; }
@@ -729,35 +752,39 @@ function openConnect() {
   }, 'secondary');
   let pairTimer;
   dialog.addEventListener('close', () => clearTimeout(pairTimer), { once: true });
-  const pair = button('Create pairing code', async () => {
+  async function createPairing() {
     if (pair.disabled) return;
     clearTimeout(pairTimer);
-    pair.disabled = true; pairArea.replaceChildren(paragraph('Creating your code…', 'muted small'));
+    pair.disabled = true; pairArea.replaceChildren(paragraph('Preparing your QR code…', 'muted small'));
     try {
-      const result = await api('/api/pair', { method: 'POST', body: {} });
+      const result = await requestPairing();
       if (!dialog.contains(pairArea)) return;
-      if (!text(result.code) || !result.expiresAt) throw new ApiError('No usable pairing code was returned. Try again.');
+      if (!/^[A-Za-z0-9_-]{12}$/.test(result.code) || !Number.isFinite(result.expiresAt) || result.expiresAt <= Date.now()) throw new ApiError('Pairing expired or unavailable. Create a new QR code.');
+      let qr;
+      try { qr = pairingQr(result.qr); }
+      catch { qr = paragraph('QR unavailable. Use manual connection below.', 'callout warning'); }
       pairArea.replaceChildren(
-        el('output', { class: 'pair-code', 'aria-label': 'Short-lived pairing code', text: result.code }),
-        paragraph(`Valid for 5 minutes · expires ${formatDate(result.expiresAt, true)}`, 'muted small'),
-        paragraph('Enter it only on your own phone. It opens your private notebook. A new code replaces the previous code.', 'muted small'),
-        button('Hide code', () => pairArea.replaceChildren(paragraph('Code hidden, not revoked. It still expires at its original time.', 'muted small')), 'ghost'));
+        qr,
+        paragraph('Scan with your phone camera and open the link. No typing needed.', 'pair-caption'),
+        paragraph('Private access · works once · expires in 5 minutes. Do not share or screenshot this QR.', 'muted small'),
+        el('details', {}, el('summary', {}, 'Manual connection'),
+          el('output', { class: 'phone-address', text: address, 'aria-label': 'Phone website address' }), copy, copyStatus,
+          paragraph('Open the address on your phone, choose Enter a code instead, then enter:', 'muted small'),
+          el('output', { class: 'pair-code', 'aria-label': 'Short-lived pairing code', text: result.code })));
       const remaining = new Date(result.expiresAt).getTime() - Date.now();
       if (Number.isFinite(remaining)) pairTimer = setTimeout(() => {
-        if (dialog.contains(pairArea)) pairArea.replaceChildren(paragraph('Code expired. Create a new one.', 'muted small'));
+        if (dialog.contains(pairArea)) pairArea.replaceChildren(paragraph('QR expired. Create a new one below.', 'muted small'));
       }, Math.max(0, Math.min(remaining, 2147483647)));
-      pair.textContent = 'Create a new code';
     } catch (error) { if (!ignored(error) && dialog.contains(pairArea)) pairArea.replaceChildren(errorBox(error.message)); }
     finally { pair.disabled = false; }
-  });
+  }
+  const pair = button('New QR code', createPairing, 'secondary');
   const body = el('div', { class: 'stack' },
-    el('section', { class: 'stack' }, el('h3', {}, '1. Open this address on your phone'),
-      address ? el('output', { class: 'phone-address', text: address, 'aria-label': 'Phone website address' }) : paragraph('No phone address is configured. Start the tunnel and configure the portal’s public origin first.', 'callout warning'),
-      address && copy, copyStatus, paragraph('Do not open 127.0.0.1 on your phone. That address is only for this Mac.', 'muted small')),
-    el('section', { class: 'stack' }, el('h3', {}, '2. Enter a pairing code on the phone'),
-      paragraph('Create it when your phone is ready. It lasts 5 minutes and can be used once.', 'muted small'), address && pair, pairArea),
-    paragraph('Keep the Mac awake and the portal and tunnel running. This temporary address may change after a tunnel restart.', 'callout'), connectionHelp());
+    address ? pairArea : paragraph('No phone address is configured. Start the tunnel and configure the portal’s public origin first.', 'callout warning'),
+    address && pair,
+    paragraph('Keep this Mac awake while using Fieldnotes on your phone.', 'muted small'), connectionHelp());
   openDialog('Connect your phone', body, 'connect');
+  if (address) void createPairing();
 }
 
 function githubSettings() {
@@ -857,4 +884,19 @@ function openProfile() {
   openDialog('Learning preferences', el('div', {}, form, githubSettings(), account), 'profile');
 }
 
-bootstrap();
+async function start() {
+  const pairing = initialPairing;
+  initialPairing = null;
+  if (pairing) {
+    main.replaceChildren(heading('Connecting your phone…', 'Opening your private notebook.'));
+    try {
+      if (!pairing.code) throw new ApiError('This QR link is invalid. Scan a new QR from your Mac.');
+      await api('/api/login', { method: 'POST', body: { code: pairing.code } });
+    } catch (error) {
+      if (!ignored(error)) lock('Could not connect. The QR may have expired or already been used. Scan a new QR from your Mac, or enter a code below.');
+      return;
+    }
+  }
+  await bootstrap();
+}
+void start();

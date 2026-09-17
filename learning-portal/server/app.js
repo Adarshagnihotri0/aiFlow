@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import QRCode from 'qrcode';
 import { lessons, readSources, fingerprint, retrieve } from './catalog.js';
 import { profileSchema, progressSchema, reviewSchema, chatSchema, redact } from './schema.js';
 import { scheduleReview } from './store.js';
@@ -56,7 +57,7 @@ export function createApp({ store, roots, publicDirectory, localAuthority = '127
     attempts = attempts.filter((at) => at > now() - 60_000);
     if (attempts.length >= 8) return res.status(429).json({ error: 'Too many pairing attempts. Try again in a minute.' });
     attempts.push(now());
-    if (!pairing || pairing.expiresAt < now() || !safeEqual(req.body?.code, pairing.code)) return res.status(401).json({ error: 'Pairing code is invalid or expired. Generate a new one on the local browser.' });
+    if (!pairing || pairing.expiresAt <= now() || !safeEqual(req.body?.code, pairing.code)) return res.status(401).json({ error: 'Pairing code is invalid or expired. Generate a new one on the local browser.' });
     pairing = null; issueSession(res, req.isLocal); res.json({ ok: true });
   });
   app.use('/api', (req, res, next) => {
@@ -69,8 +70,12 @@ export function createApp({ store, roots, publicDirectory, localAuthority = '127
   });
   app.post('/api/pair', (req, res) => {
     if (!req.isLocal) return res.status(403).json({ error: 'Only the local browser can pair another device.' });
-    pairing = { code: randomBytes(9).toString('base64url'), expiresAt: now() + 300_000 };
-    res.json(pairing);
+    const nextPairing = { code: randomBytes(9).toString('base64url'), expiresAt: now() + 300_000 };
+    // Encode locally: never send the bearer code to a third-party QR service.
+    // A fragment keeps it out of request URLs, access logs and referrers.
+    const modules = publicOrigin ? QRCode.create(`${publicOrigin}/#pair=${nextPairing.code}`, { errorCorrectionLevel: 'M' }).modules : null;
+    pairing = nextPairing;
+    res.json({ ...pairing, qr: modules ? { size: modules.size, data: Array.from(modules.data) } : null });
   });
   const allLessons = () => {
     const sessions = store.snapshot().sessions;

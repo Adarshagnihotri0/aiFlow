@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
+import jsQR from 'jsqr';
 import { createApp } from '../server/app.js';
 import { createStore } from '../server/store.js';
 import { createInbox, sessionLesson } from '../server/sessions.js';
@@ -81,6 +82,47 @@ test('private data requires pairing remotely; local bootstrap grants only direct
   assert.match(result.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
   assert.equal((await call('/api/source/not-allowed')).status, 404);
 });
+test('QR encodes only the approved public origin and a fragment code; replacement and exact expiry are enforced', async (t) => {
+  let clock = Date.now();
+  const { call, store } = await fixture(t, { now: () => clock });
+  await call('/api/bootstrap');
+  const first = await call('/api/pair', { method: 'POST', body: {} });
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('cache-control'), 'no-store');
+  const { size, data } = first.body.qr;
+  const width = (size + 8) * 5;
+  const pixels = new Uint8ClampedArray(width * width * 4).fill(255);
+  for (let y = 0; y < width; y++) for (let x = 0; x < width; x++) {
+    const row = Math.floor(y / 5) - 4; const col = Math.floor(x / 5) - 4;
+    if (row >= 0 && row < size && col >= 0 && col < size && data[row * size + col]) {
+      const offset = (y * width + x) * 4;
+      pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 0;
+    }
+  }
+  // Independently decode pixels, not just compare the encoder's own matrix.
+  const decoded = jsQR(pixels, width, width);
+  assert.equal(decoded?.data, `https://notebook.example/#pair=${first.body.code}`);
+  assert.match(first.body.code, /^[A-Za-z0-9_-]{12}$/);
+  assert.equal(new URL(decoded.data).search, '');
+  assert.equal(first.body.expiresAt, clock + 300000);
+  assert.equal((await call('/api/pair', { method: 'POST', body: {}, remote: true })).status, 403);
+  assert.equal((await call('/api/pair', { method: 'POST', body: {}, headers: { 'cf-connecting-ip': '127.0.0.1' } })).status, 403);
+  const second = await call('/api/pair', { method: 'POST', body: {} });
+  assert.notEqual(second.body.code, first.body.code);
+  assert.equal((await call('/api/login', { method: 'POST', body: { code: first.body.code }, remote: true })).status, 401);
+  clock = second.body.expiresAt;
+  assert.equal((await call('/api/login', { method: 'POST', body: { code: second.body.code }, remote: true })).status, 401);
+  assert.equal(store.snapshot().profile.aiConsent, false);
+});
+
+test('pairing without a public origin offers a code but no misleading QR', async (t) => {
+  const { call } = await fixture(t, { publicOrigin: '' });
+  await call('/api/bootstrap');
+  const result = await call('/api/pair', { method: 'POST', body: {} });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.qr, null);
+});
+
 test('pairing expires, is single use, cannot be generated remotely and logout revokes cookie', async (t) => {
   let clock = Date.now(); const { call } = await fixture(t, { now: () => clock });
   await call('/api/bootstrap');
