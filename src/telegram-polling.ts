@@ -1,27 +1,18 @@
 import https from 'https';
 import { STATIC_MODEL_ID } from './adapters';
-import { invokeModelOpenAI } from './bedrock';
 import { forwardTelegramThreadText } from './services/telegram-forwarder';
 import {
-  createPendingWork,
-  PendingWork,
-  resolveWorkspace,
-  runWorkspaceAgent,
-  runWorkspaceCheck,
-  workspaceFingerprint,
+  createPendingWork, PendingWork, resolveWorkspace, runWorkspaceAgent, runWorkspaceCheck, workspaceFingerprint,
 } from './services/workspace-agent';
+import { actionHelp, handleActionMessage, readActionCursor, recordActionCursor } from './services/telegram-action-inbox';
+import { TelegramInference } from './services/telegram-inference';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const TELEGRAM_ENABLED = process.env.TELEGRAM_ENABLED !== 'false';
 const MAX_PROMPT_LENGTH = 12000;
-const MAX_HISTORY_MESSAGES = 20;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 35000;
-
-interface ConversationMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+const LEGACY_COMMANDS = ['work', 'workconfirm', 'workcancel', 'check'];
 
 interface TelegramMessage {
   message_id: number;
@@ -45,10 +36,13 @@ interface TelegramUpdate {
   message?: TelegramMessage;
 }
 
-const histories = new Map<string, ConversationMessage[]>();
+const inference = new TelegramInference();
 const pendingWork = new Map<string, PendingWork>();
+const allowedActionUsers = (process.env.TELEGRAM_ACTION_USER_IDS ?? '').split(',').map(id => id.trim()).filter(Boolean);
 let lastUpdateId = 0;
 let isProcessing = false;
+let pollingStarted = false;
+let pollRetryDelayMs = 1000;
 let lastTelegramError = 0;
 const ERROR_LOG_INTERVAL_MS = 60000;
 
@@ -109,7 +103,7 @@ function telegramRequest<T>(method: string, payload: Record<string, unknown>, ti
 
 async function getUpdates(): Promise<TelegramUpdate[]> {
   try {
-    return await telegramRequest<TelegramUpdate[]>(
+    const updates = await telegramRequest<TelegramUpdate[]>(
       'getUpdates',
       {
         offset: lastUpdateId + 1,
@@ -118,8 +112,12 @@ async function getUpdates(): Promise<TelegramUpdate[]> {
       },
       TELEGRAM_REQUEST_TIMEOUT_MS,
     );
-  } catch (error) {
-    logTelegramError('Polling failed', error);
+    pollRetryDelayMs = 1000;
+    return updates;
+  } catch {
+    logTelegramError('Polling unavailable; retrying with bounded backoff', new Error('Transport failure'));
+    await new Promise(resolve => setTimeout(resolve, pollRetryDelayMs));
+    pollRetryDelayMs = Math.min(30000, pollRetryDelayMs * 2);
     return [];
   }
 }
@@ -139,13 +137,17 @@ async function registerCommands(): Promise<void> {
   await telegramRequest<boolean>('setMyCommands', {
     commands: [
       { command: 'ask', description: 'Ask GLM-5 in this workspace topic' },
-      { command: 'work', description: 'Plan project work for confirmation' },
-      { command: 'confirm', description: 'Confirm a pending project change' },
-      { command: 'cancel', description: 'Cancel a pending project change' },
-      { command: 'check', description: 'Run a configured project check' },
+      { command: 'action', description: 'Request an allowlisted action for local agent pickup' },
+      { command: 'actions', description: 'Show your action request statuses' },
+      { command: 'confirm', description: 'Queue an exact request; does not execute it' },
+      { command: 'cancel', description: 'Cancel an unstarted action request' },
+      { command: 'work', description: 'Creator only: plan workspace changes' },
+      { command: 'workconfirm', description: 'Creator only: execute a pending workspace plan' },
+      { command: 'workcancel', description: 'Creator only: cancel a pending workspace plan' },
+      { command: 'check', description: 'Creator only: run a configured workspace check' },
       { command: 'clear', description: 'Clear this topic conversation' },
       { command: 'history', description: 'Show this topic history size' },
-      { command: 'status', description: 'Show bot and model status' },
+      { command: 'status', description: 'Show last actual question inference outcome' },
       { command: 'help', description: 'Show available phone commands' },
     ],
   });
@@ -175,21 +177,15 @@ function parseCommand(text: string): { command?: string; argument: string } {
 }
 
 function helpText(): string {
-  return [
-    '**Phone commands**',
-    '',
-    '`/ask <message>` - ask GLM-5 in this topic',
-    '`/work <request>` - create an owner-only project plan',
-    '`/confirm <token>` - approve the planned file changes',
-    '`/cancel <token>` - cancel pending work',
-    '`/check build` - run this workspace build check',
-    '`/clear` - clear only this topic history',
-    '`/history` - show this topic history size',
-    '`/status` - show the active model',
-    '`/help` - show these commands',
-    '',
-    'Project work is restricted to the group creator, the workspace mapped to this topic, and a 10-minute single-use confirmation.',
-  ].join('\n');
+  return [actionHelp, '', '**Separate creator-only workspace commands**',
+    '/work <request> — read-only plan in this mapped workspace topic',
+    '/workconfirm <token> — execute that plan; single use, expires in 10 minutes',
+    '/workcancel <token> — cancel that plan (not an inbox request)',
+    '/check <name> — run only an administrator-configured check; defaults to build',
+    '/confirm and /cancel are inbox-only; they never execute a workspace plan.', '',
+    '/ask <message> — independent model conversation, no workspace tools or VS Code session access',
+    '/clear — clear topic conversation', '/history — history size', '/status — last actual question inference',
+    'The inbox requires explicit local pickup; it does not control the current VS Code session.'].join('\n');
 }
 
 async function isChatCreator(userId?: number): Promise<boolean> {
@@ -201,99 +197,104 @@ async function isChatCreator(userId?: number): Promise<boolean> {
   return member.status === 'creator';
 }
 
-function removeExpiredWork(): void {
-  const now = Date.now();
-  for (const [token, pending] of pendingWork) {
-    if (pending.expiresAt <= now) pendingWork.delete(token);
-  }
+async function isAuthorizedUser(userId?: number): Promise<boolean> {
+  if (!userId) return false;
+  return allowedActionUsers.length > 0
+    ? allowedActionUsers.includes(String(userId))
+    : isChatCreator(userId);
 }
 
 async function processWorkspaceCommand(
-  command: string,
-  argument: string,
-  message: TelegramMessage,
+  command: string, argument: string, message: TelegramMessage, updateId: number,
 ): Promise<string> {
-  const ownerId = message.from?.id;
+  if (!(await isAuthorizedUser(message.from?.id))) return 'Action access denied.';
+  const workspace = await resolveWorkspace(message.message_thread_id);
+  if (!workspace) return 'This topic is not enabled for action intake.';
+  // This integration is intentionally scoped to Hopper, never another mapped repository.
+  if (workspace.root !== '/Users/adarshagnihotri/Desktop/grasshopper/bitchat-android') {
+    return 'This inbox supports only the configured Hopper workspace.';
+  }
+  return handleActionMessage({
+    updateId, chatId: String(message.chat?.id ?? ''), userId: String(message.from?.id ?? ''),
+    threadId: message.message_thread_id ?? 0, workspace: workspace.root,
+    isBot: message.from?.is_bot, command, argument,
+  }, { chatId: CHAT_ID ?? '', allowedUsers: allowedActionUsers, isChatCreator: id => isChatCreator(Number(id)) });
+}
+
+// Restored HEAD workspace-agent flow. It is deliberately separate from the durable action inbox.
+// Called only after creator authorization in handleTelegramMessage.
+async function processLegacyWorkspaceCommand(command: string, argument: string, message: TelegramMessage): Promise<string> {
+  const ownerId = message.from!.id!;
   const threadId = message.message_thread_id;
-  if (!(await isChatCreator(ownerId))) {
-    return 'Project commands are restricted to the Telegram group creator.';
-  }
-  if (!ownerId || threadId === undefined) {
-    return 'Run project commands inside a configured workspace topic.';
+  if (threadId === undefined) return 'Run project commands inside a configured workspace topic.';
+  for (const [token, pending] of pendingWork) {
+    if (pending.expiresAt <= Date.now()) pendingWork.delete(token);
   }
 
-  removeExpiredWork();
-  if (command === 'cancel') {
+  if (command === 'workcancel' || command === 'workconfirm') {
     const pending = pendingWork.get(argument);
     if (!pending || pending.ownerId !== ownerId || pending.threadId !== threadId) {
-      return 'No matching pending project request was found.';
+      return 'No matching pending project request was found (wrong owner/topic, expired, or consumed).';
     }
-    pendingWork.delete(argument);
-    return '**Project request cancelled.**';
-  }
-
-  if (command === 'confirm') {
-    const pending = pendingWork.get(argument);
-    if (!pending || pending.ownerId !== ownerId || pending.threadId !== threadId) {
-      return 'No matching pending project request was found.';
+    pendingWork.delete(argument); // Consume before any asynchronous work; failure never makes a token reusable.
+    if (command === 'workcancel') return '**Project request cancelled.**';
+    const workspace = await resolveWorkspace(threadId);
+    if (!workspace || workspace.root !== pending.workspace.root || workspace.topicId !== pending.threadId) {
+      return 'Workspace binding changed or disabled. Run /work again for a fresh plan.';
     }
-    pendingWork.delete(argument);
-    const currentFingerprint = await workspaceFingerprint(pending.workspace);
+    const currentFingerprint = await workspaceFingerprint(workspace);
+    if (pending.expiresAt <= Date.now()) return 'Project confirmation expired. Run /work again for a fresh plan.';
     if (currentFingerprint !== pending.fingerprint) {
-      return 'The workspace changed after the plan was created. Run `/work` again to review a fresh plan.';
+      return 'The workspace changed after the plan was created. Run /work again to review a fresh plan.';
     }
-    const result = await runWorkspaceAgent(pending.workspace, pending.request, 'execute');
-    return `**Project changes completed in ${pending.workspace.name}**\n\n${result}\n\nRun \`/check build\` to validate.`;
+    const result = await runWorkspaceAgent(workspace, pending.request, 'execute');
+    return `**Workspace agent returned for ${workspace.name}**\n\n${result}\n\nReview reported changes; completion is not independently verified. Run /check build to validate.`;
   }
 
   const workspace = await resolveWorkspace(threadId);
-  if (!workspace) {
-    return 'This topic is not enabled for project execution.';
-  }
-
+  if (!workspace) return 'This topic is not enabled for project execution.';
   if (command === 'check') {
     const checkName = argument || 'build';
     const result = await runWorkspaceCheck(workspace, checkName);
-    return `**${workspace.name}: ${checkName} passed**\n\n${result}`;
+    return `**${workspace.name}: ${checkName} check exited successfully**\n\n${result}`;
   }
-
   if (!argument) return 'Usage: `/work describe the project change`';
-  if (argument.length > MAX_PROMPT_LENGTH) {
-    return `Request is too long. Keep it under **${MAX_PROMPT_LENGTH.toLocaleString()} characters**.`;
-  }
+  if (argument.length > MAX_PROMPT_LENGTH) return `Request is too long. Keep it under ${MAX_PROMPT_LENGTH} characters.`;
   const fingerprint = await workspaceFingerprint(workspace);
   const plan = await runWorkspaceAgent(workspace, argument, 'plan');
   const pending = createPendingWork(argument, ownerId, threadId, workspace, fingerprint);
   pendingWork.set(pending.token, pending);
   return [
-    `**Project plan for ${workspace.name}**`,
-    '',
-    plan,
-    '',
-    'No files have changed.',
-    `Confirm within 10 minutes with \`/confirm ${pending.token}\``,
-    `Cancel with \`/cancel ${pending.token}\``,
+    `**Project plan for ${workspace.name}**`, '', plan, '',
+    'Read-only planning completed; no edit execution was requested.',
+    `Confirm within 10 minutes with /workconfirm ${pending.token}`,
+    `Cancel with /workcancel ${pending.token}`,
+    '/confirm and /cancel apply only to the separate action inbox.',
   ].join('\n');
 }
 
-async function processMessage(text: string, key: string, message: TelegramMessage): Promise<string> {
+async function processMessage(text: string, key: string, message: TelegramMessage, updateId: number): Promise<string> {
   const { command, argument } = parseCommand(text);
 
-  if (command && ['work', 'confirm', 'cancel', 'check'].includes(command)) {
-    return processWorkspaceCommand(command, argument, message);
+  if (command && ['action', 'actions', 'confirm', 'cancel'].includes(command)) {
+    return processWorkspaceCommand(command, argument, message, updateId);
   }
-
+  if (command && LEGACY_COMMANDS.includes(command)) {
+    try {
+      return await processLegacyWorkspaceCommand(command, argument, message);
+    } catch {
+      // A subprocess error can contain private workspace text; never relay/log it.
+      console.error('[Telegram] Workspace operation failed; completion unverified');
+      return 'Workspace operation failed; completion is not confirmed. A /workconfirm token is consumed even on failure. Review locally before requesting a new plan.';
+    }
+  }
   if (command === 'help' || command === 'start') return helpText();
-  if (command === 'status') {
-    return `**Ready**\n\nModel: \`${STATIC_MODEL_ID}\`\nTopic history: ${histories.get(key)?.length ?? 0} messages`;
-  }
+  if (command === 'status') return `Model: \`${STATIC_MODEL_ID}\`\n\n${inference.status(key)}`;
   if (command === 'clear' || command === 'reset') {
-    histories.delete(key);
-    return '**Conversation cleared**\n\nOnly this Telegram topic was reset.';
+    inference.clear(key);
+    return '**Conversation cleared**\n\nOnly this Telegram topic history was reset; inference outcomes are retained.';
   }
-  if (command === 'history') {
-    return `This topic currently has **${histories.get(key)?.length ?? 0}** conversation messages.`;
-  }
+  if (command === 'history') return `This topic currently has **${inference.historyLength(key)}** conversation messages.`;
   if (command && command !== 'ask') return helpText();
 
   const prompt = command === 'ask' ? argument : argument.replace(/^@Hopperchatbot\s*/i, '').trim();
@@ -301,38 +302,29 @@ async function processMessage(text: string, key: string, message: TelegramMessag
   if (prompt.length > MAX_PROMPT_LENGTH) {
     return `Message is too long. Keep it under **${MAX_PROMPT_LENGTH.toLocaleString()} characters**.`;
   }
+  return inference.ask(key, prompt);
+}
 
-  const history = histories.get(key) || [];
-  history.push({ role: 'user', content: prompt });
-  if (history.length > MAX_HISTORY_MESSAGES) history.splice(0, history.length - MAX_HISTORY_MESSAGES);
-
+/** Single-message dispatch, also usable by offline tests without starting a poller. */
+export async function handleTelegramMessage(message: TelegramMessage, updateId: number): Promise<string | undefined> {
+  if (message.from?.is_bot || !CHAT_ID || message.chat?.id?.toString() !== CHAT_ID || !message.text?.trim()) return undefined;
+  const { command } = parseCommand(message.text);
+  let authorized = false;
   try {
-    const response = await invokeModelOpenAI({
-      messages: [
-        {
-          role: 'system',
-          content: 'You are Hopper, a concise engineering assistant replying through Telegram. Use Markdown. You may analyze, explain, and plan, but do not claim to have edited files, run commands, or completed actions because this Telegram channel has no workspace tools.',
-        },
-        ...history,
-      ],
-      max_tokens: 2000,
-      temperature: 0.4,
-    });
-    const choices = response['choices'] as Array<{ message?: { content?: string } }> | undefined;
-    const responseText = choices?.[0]?.message?.content?.trim() || 'The model returned no text response.';
-    history.push({ role: 'assistant', content: responseText });
-    if (history.length > MAX_HISTORY_MESSAGES) history.splice(0, history.length - MAX_HISTORY_MESSAGES);
-    histories.set(key, history);
-    return responseText;
-  } catch (error) {
-    logTelegramError('Model request failed', error);
-    history.pop();
-    histories.set(key, history);
-    return 'The model request failed. Please try again in a moment.';
+    authorized = command && LEGACY_COMMANDS.includes(command)
+      ? await isChatCreator(message.from?.id)
+      : await isAuthorizedUser(message.from?.id);
+  } catch {
+    // Membership lookup failure denies access without workspace/model effects or raw API diagnostics.
+    return undefined;
   }
+  if (!authorized) return undefined;
+  await sendTypingAction(message.message_thread_id).catch(() => undefined);
+  return processMessage(message.text.trim(), conversationKey(message.message_thread_id), message, updateId);
 }
 
 export async function startTelegramPolling(): Promise<void> {
+  if (pollingStarted) return;
   if (!TELEGRAM_ENABLED) {
     console.log('[Telegram] Inbound polling disabled by TELEGRAM_ENABLED=false');
     return;
@@ -341,50 +333,45 @@ export async function startTelegramPolling(): Promise<void> {
     console.log('[Telegram] Inbound polling disabled: bot token and chat ID are required');
     return;
   }
-
-  try {
+  pollingStarted = true;
+  // State must be readable before consuming any updates. No startup catch-and-continue.
+  lastUpdateId = await readActionCursor();
+  if (lastUpdateId === 0) {
     await discardPendingUpdates();
-    await registerCommands();
-  } catch (error) {
-    logTelegramError('Startup synchronization failed', error);
+    await recordActionCursor(lastUpdateId);
   }
-
-  console.log('[Telegram] Bidirectional topic polling started');
-  console.log('[Telegram] Phone entry point: /ask <message>');
+  await registerCommands();
+  console.log('[Telegram] Single-consumer polling started; inbox queue-only; legacy workspace commands creator-only');
 
   while (true) {
     const updates = await getUpdates();
     for (const update of updates) {
       lastUpdateId = Math.max(lastUpdateId, update.update_id);
       const message = update.message;
-      if (!message || message.from?.is_bot) continue;
-      if (message.chat?.id?.toString() !== CHAT_ID) continue;
-      const text = message.text?.trim();
-      if (!text || isProcessing) continue;
-
+      if (!message || isProcessing) {
+        await recordActionCursor(lastUpdateId);
+        continue;
+      }
       isProcessing = true;
-      const messageThreadId = message.message_thread_id;
-      const key = conversationKey(messageThreadId);
-      const startedAt = Date.now();
-
       try {
-        await sendTypingAction(messageThreadId).catch(() => undefined);
-        const response = await processMessage(text, key, message);
-        await forwardTelegramThreadText('Hopper | GLM-5', response, messageThreadId);
-        console.log(`[Telegram] Replied in topic ${key} after ${Date.now() - startedAt}ms`);
-      } catch (error) {
-        logTelegramError('Message processing failed', error);
+        const response = await handleTelegramMessage(message, update.update_id);
+        if (response !== undefined) {
+          await forwardTelegramThreadText('Hopper', response, message.message_thread_id);
+          console.log('[Telegram] Authorized response processed');
+        }
       } finally {
         isProcessing = false;
       }
+      // If processing/persistence fails, stop polling rather than advancing an unrecorded action.
+      await recordActionCursor(lastUpdateId);
     }
   }
 }
 
 export function clearHistory(): void {
-  histories.clear();
+  inference.clear();
 }
 
 export function getHistoryLength(): number {
-  return Array.from(histories.values()).reduce((total, history) => total + history.length, 0);
+  return inference.historyLength();
 }

@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "run": "hopper-20260913",
+  "sequence": 1,
+  "title": "Hopper engineering briefing",
+  "deployment": {
+    "state": "staged",
+    "detail": "Telegram reporting is being validated locally; no reviewed demo has been sent and no runtime activation is claimed."
+  },
+  "executive": {
+    "summary": "Telegram reporting is being validated. Android completion is not established: the earlier compile failed and any repair remains unverified.",
+    "impact": "Curated updates can make blockers and tradeoffs visible without forwarding raw agent conversations. Device-level sync confidence remains pending."
+  },
+  "agents": [
+    {
+      "name": "Briefing implementer",
+      "role": "Proxy reporting",
+      "status": "working",
+      "findings": [
+        {
+          "summary": "Catalog-only milestones cannot express engineering findings. A structured report adapter is staged for review.",
+          "evidence": {
+            "state": "reported",
+            "reference": "Producer report; isolated mock checks and main-agent review are the next validation gates."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Main agent",
+      "role": "Android validation coordination",
+      "status": "blocked",
+      "findings": [
+        {
+          "summary": "Earlier Android Kotlin compilation failed; a repaired build has not been verified in this briefing.",
+          "evidence": {
+            "state": "failed",
+            "reference": "Prior compile task exit code 1 reported in session context; no successful repair result supplied."
+          }
+        },
+        {
+          "summary": "Sync privacy and transport findings were reported, but runtime behavior has not been proven.",
+          "evidence": {
+            "state": "reported",
+            "reference": "Prior agent findings only; no two-device runtime evidence attached."
+          }
+        }
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "question": "How should ongoing subagent findings reach Telegram?",
+      "options": [
+        {
+          "id": "curated",
+          "label": "Explicit curated briefing producer",
+          "benefits": "Named findings, evidence states and tradeoffs with bounded private delivery metadata.",
+          "costs": "Main agent must curate and explicitly publish each meaningful update."
+        },
+        {
+          "id": "capture",
+          "label": "Automatic transcript capture (not implemented)",
+          "benefits": "Less manual reporting work.",
+          "costs": "Risk of exposing sensitive content, unsupported claims and private reasoning."
+        }
+      ],
+      "selected": "curated",
+      "why": "Reviewable structured updates preserve report usefulness without automatically exporting model output."
+    }
+  ],
+  "architecture": [
+    {
+      "title": "Staged explicit reporting path",
+      "lines": [
+        "[Subagent findings]",
+        "        | main agent curates JSON",
+        "        v",
+        "[Strict schema] -> [Preview + review]",
+        "        | explicit send only",
+        "        v",
+        "[Durable reservation]",
+        "        | numbered whole-block parts",
+        "        v",
+        "[Existing sender] -> [Telegram]",
+        "No new poller; no automatic capture."
+      ]
+    }
+  ],
+  "research": [
+    {
+      "question": "Does the report remain readable on a phone?",
+      "why": "Mock formatting checks do not prove Telegram rendering or human comprehension.",
+      "nextEvidence": "Main agent reviews preview, sends an approved demo, and checks phone rendering.",
+      "owner": "Main agent"
+    },
+    {
+      "question": "Are Android sync privacy and transport claims runtime-proven?",
+      "why": "Reported source findings alone cannot establish distributed behavior.",
+      "nextEvidence": "Verify Android compile repair, then obtain scoped physical two-device evidence.",
+      "owner": "Android validation owner"
+    }
+  ],
+  "actions": [
+    {
+      "action": "Review briefing schema and run proxy tests serially.",
+      "owner": "Main agent",
+      "state": "next"
+    },
+    {
+      "action": "Send only the reviewed demo; inspect numbered parts on a phone.",
+      "owner": "Main agent",
+      "state": "next"
+    },
+    {
+      "action": "Revalidate Android compilation before claiming repair or completion.",
+      "owner": "Android validation owner",
+      "state": "blocked"
+    }
+  ]
+}

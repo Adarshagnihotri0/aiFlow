@@ -507,18 +507,19 @@ function buildOpenAIPayload(body: Record<string, unknown>): Record<string, unkno
 }
 
 /** Non-streaming: forward OpenAI-shape request straight to Mantle's OpenAI-compatible endpoint. */
-export async function invokeModelOpenAI(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function invokeModelOpenAI(body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const payload = buildOpenAIPayload(body);
   const res = await fetch(`${MANTLE_BASE_URL}/v1/chat/completions`, {
     method: 'POST',
     headers: openaiHeaders(),
     body: JSON.stringify(payload),
+    signal,
   });
 
   if (!res.ok) {
-    const errText = await readErrorBody(res);
-    logger?.error('Mantle error', { status: res.status, errText });
-    throw new Error(`Mantle error ${res.status}: ${errText}`);
+    // Do not read/log upstream error bodies: they may contain credentials or prompt content.
+    void res.body?.cancel().catch(() => undefined);
+    throw Object.assign(new Error('Mantle HTTP request failed'), { status: res.status });
   }
 
   const json = (await res.json()) as Record<string, unknown>;

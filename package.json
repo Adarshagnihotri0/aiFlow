@@ -6,7 +6,13 @@
   "scripts": {
     "build": "tsc",
     "build:notify": "npm run build",
+    "test": "npm run test:prompt-cache && npm run test:telegram",
     "test:prompt-cache": "npm run build && node scripts/test-prompt-cache.js",
+    "test:telegram": "npm run build && node --test --test-concurrency=1 scripts/test-telegram-actions.js scripts/test-telegram-progress.js scripts/test-telegram-integration.js scripts/test-telegram-briefing.js scripts/test-telegram-inference.js scripts/test-telegram-commands.js",
+    "test:telegram-briefing": "npm run build && node --test scripts/test-telegram-briefing.js",
+    "telegram:briefing": "node scripts/telegram-briefing.js",
+    "telegram:progress": "node scripts/telegram-progress.js",
+    "telegram:actions": "node scripts/telegram-actions.js",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
     "dev:notify": "npm run dev"

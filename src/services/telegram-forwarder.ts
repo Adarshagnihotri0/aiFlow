@@ -388,6 +388,25 @@ export function forwardExternalText(label: string, text: string): Promise<void> 
   return enqueueTask(() => deliver(label, text));
 }
 
+// Explicit progress only: reuse this sender without enabling transcript forwarding.
+// The caller receives failures and a real Telegram acknowledgement, not best effort.
+export function sendProgressText(text: string): Promise<{ messageId: number; topic: 'workspace' | 'general' }> {
+  const result = deliveryQueue.then(async () => {
+    const config = forwardingConfig(false);
+    if (!config) throw new Error('Telegram progress is not configured');
+    if (!text.trim() || text.length > 3000) throw new Error('Invalid progress message size');
+    const cached = readWorkspaceTopics().topics[workspaceTopicName('bitchat-android')];
+    const threadId = Number.isSafeInteger(cached) && cached > 0 ? cached : undefined;
+    const messageId = await sendTelegramChunk(
+      config.token, config.chatId, formatTelegramMessage('Hopper progress', redactSensitiveText(text)), threadId,
+    );
+    if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error('Missing Telegram acknowledgement');
+    return { messageId, topic: threadId === undefined ? 'general' as const : 'workspace' as const };
+  });
+  deliveryQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 export function forwardTelegramThreadText(
   label: string,
   text: string,
@@ -397,6 +416,9 @@ export function forwardTelegramThreadText(
 }
 
 export function forwardWorkspaceText(workspace: string, text: string): Promise<void> {
+  // The existing one-shot VS Code Stop hook imports this sender on each invocation.
+  // Hopper uses explicit structured milestones, never whole completed responses.
+  if (workspace === 'bitchat-android') return Promise.resolve();
   return enqueueTask(async () => {
     const config = forwardingConfig();
     if (!config || !text.trim()) return;
